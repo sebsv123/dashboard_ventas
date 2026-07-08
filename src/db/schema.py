@@ -90,6 +90,20 @@ CREATE TABLE IF NOT EXISTS alertas_reconciliacion (
     resuelta INTEGER DEFAULT 0,
     resolucion_nota TEXT
 );
+
+-- Snapshot mensual derivado, recalculado cada vez que se importan datos
+-- nuevos (ver db/carga.recalcular_resumen_mensual). Evita tener que
+-- recalcular todo el histórico desde cero cada vez que se abre el
+-- dashboard, y es la base sobre la que crecen los insights históricos
+-- a medida que se sube más histórico.
+CREATE TABLE IF NOT EXISTS resumen_mensual (
+    periodo TEXT PRIMARY KEY,        -- "AAAA-MM", según fecha_efecto
+    produccion_total REAL,           -- prima anualizada de pólizas nuevas del mes
+    polizas_nuevas INTEGER,
+    rappel_real REAL,                -- NULL si el mes aún no tiene factura_pdf
+    comision_neta_real REAL,         -- NULL si el mes aún no tiene factura_pdf
+    fecha_actualizacion TEXT DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 

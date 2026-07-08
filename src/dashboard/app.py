@@ -17,7 +17,13 @@ import streamlit as st
 RAIZ = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(RAIZ / "src"))
 
-from db.carga import cargar_facturacion, cargar_liquidacion, cargar_polizas, cargar_factura_pdf
+from db.carga import (
+    cargar_facturacion,
+    cargar_liquidacion,
+    cargar_polizas,
+    cargar_factura_pdf,
+    recalcular_resumen_mensual,
+)
 from db.schema import conectar, inicializar_schema
 from engine.comisiones import estimar_comision_poliza
 from engine.config_contrato import cargar_contrato
@@ -125,6 +131,8 @@ with st.sidebar:
                 mensajes.append(f"Factura PDF: {n} entidad(es) importada(s).")
             if not mensajes:
                 st.warning("No has seleccionado ningún fichero.")
+            else:
+                recalcular_resumen_mensual(conn, contrato)
             for m in mensajes:
                 st.success(m)
             st.cache_data.clear()

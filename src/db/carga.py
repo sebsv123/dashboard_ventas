@@ -6,6 +6,9 @@ import sqlite3
 
 import pandas as pd
 
+from engine.config_contrato import ContratoConfig
+from engine.insights import construir_produccion_polizas
+
 
 def _fecha_a_texto(valor):
     if valor is None or (isinstance(valor, float) and pd.isna(valor)):
@@ -120,3 +123,56 @@ def cargar_factura_pdf(conn: sqlite3.Connection, facturas: list) -> int:
         filas_insertadas += cur.rowcount
     conn.commit()
     return filas_insertadas
+
+
+def recalcular_resumen_mensual(conn: sqlite3.Connection, contrato: ContratoConfig) -> int:
+    """Recalcula la tabla `resumen_mensual` a partir de las tablas brutas.
+
+    Se llama cada vez que se importan datos nuevos. Guarda un snapshot por
+    periodo (AAAA-MM de fecha_efecto) con la producción total y el nº de
+    pólizas nuevas; si ya hay factura_pdf de ese mes, añade también el
+    rappel y la comisión neta reales.
+    """
+    df_polizas = pd.read_sql(
+        "SELECT * FROM polizas", conn, parse_dates=["fecha_efecto"]
+    )
+    df_facturacion = pd.read_sql("SELECT * FROM facturacion", conn)
+    df_factura_pdf = pd.read_sql("SELECT * FROM factura_pdf", conn)
+
+    df_produccion = construir_produccion_polizas(df_polizas, df_facturacion, contrato)
+    if df_produccion.empty:
+        return 0
+
+    cur = conn.cursor()
+    filas = 0
+    for periodo, grupo in df_produccion.groupby("periodo"):
+        polizas_nuevas = len(grupo)
+        produccion_total = round(float(grupo["prima_anual"].sum()), 2)
+
+        facturas_periodo = df_factura_pdf[df_factura_pdf["periodo"] == periodo]
+        if facturas_periodo.empty:
+            rappel_real = None
+            comision_neta_real = None
+        else:
+            rappel_real = round(float(facturas_periodo["rappel"].sum()), 2)
+            comision_neta_real = round(
+                float(facturas_periodo["total_factura"].sum()) - rappel_real, 2
+            )
+
+        cur.execute(
+            """
+            INSERT INTO resumen_mensual
+                (periodo, produccion_total, polizas_nuevas, rappel_real, comision_neta_real)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(periodo) DO UPDATE SET
+                produccion_total=excluded.produccion_total,
+                polizas_nuevas=excluded.polizas_nuevas,
+                rappel_real=excluded.rappel_real,
+                comision_neta_real=excluded.comision_neta_real,
+                fecha_actualizacion=CURRENT_TIMESTAMP
+            """,
+            (periodo, produccion_total, polizas_nuevas, rappel_real, comision_neta_real),
+        )
+        filas += 1
+    conn.commit()
+    return filas
