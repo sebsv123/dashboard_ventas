@@ -56,6 +56,10 @@ class ContratoConfig(BaseModel):
     rappel: dict
     periodo_devengo: dict
     alertas: dict
+    # Objetivos propios de Sebastián (no vienen del contrato de ASISA, pero
+    # viven aquí porque es la única fuente de verdad de "números" del
+    # proyecto — nunca hardcodear un objetivo en el código).
+    objetivos: dict = Field(default_factory=dict)
 
     @property
     def retencion_irpf(self) -> float:
@@ -81,6 +85,10 @@ class ContratoConfig(BaseModel):
     @property
     def dias_antelacion_cambio_tarifa(self) -> int:
         return self.alertas["dias_antelacion_cambio_tarifa"]
+
+    @property
+    def objetivo_produccion_anual(self) -> float:
+        return self.objetivos.get("produccion_anual", 100000.0)
 
 
 @lru_cache(maxsize=1)

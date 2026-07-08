@@ -29,6 +29,7 @@ from db.schema import conectar, inicializar_schema
 from engine.comisiones import estimar_comision_poliza
 from engine.config_contrato import cargar_contrato
 from engine.fiscal import anios_disponibles, calcular_retenciones_anio
+from engine.objetivo import calcular_objetivo_anual
 from engine.insights import (
     alertas_cambio_tarifa,
     construir_produccion_polizas,
@@ -311,8 +312,11 @@ st.divider()
 #   - Insights: todo el histórico (como Resumen), pero al agrupar "por mes"
 #     también usa periodo_liquidacion vía construir_produccion_polizas,
 #     por la misma razón que Rappel.
-tab_resumen, tab_polizas, tab_rappel, tab_alertas, tab_insights, tab_irpf = st.tabs(
-    ["📊 Resumen", "📋 Pólizas", "🎯 Rappel", "⚠️ Alertas", "📈 Insights", "💶 Retenciones IRPF"]
+tab_resumen, tab_polizas, tab_rappel, tab_alertas, tab_insights, tab_irpf, tab_objetivo = st.tabs(
+    [
+        "📊 Resumen", "📋 Pólizas", "🎯 Rappel", "⚠️ Alertas", "📈 Insights",
+        "💶 Retenciones IRPF", "🎯 Objetivo anual",
+    ]
 )
 
 # =============================================================================
@@ -694,3 +698,71 @@ with tab_irpf:
                 width="stretch",
                 hide_index=True,
             )
+
+# =============================================================================
+# TAB: Objetivo anual
+# =============================================================================
+with tab_objetivo:
+    st.subheader("Objetivo de producción del año")
+    st.caption(
+        "Suma toda la producción nueva del año natural en curso (salud "
+        "mensual anualizada, salud prepago anual íntegra, y vida "
+        "anualizada), usando el mismo periodo real (periodo_liquidacion) "
+        "que el resto del dashboard — no el mes calendario de fecha_efecto."
+    )
+
+    _hoy_objetivo = date.today()
+    objetivo_input = st.number_input(
+        "Objetivo anual (€)",
+        min_value=0.0,
+        value=float(contrato.objetivo_produccion_anual),
+        step=1000.0,
+        help=(
+            "Por defecto viene de config/contrato.yaml "
+            "(objetivos.produccion_anual). Cambiarlo aquí solo afecta a "
+            "esta sesión del dashboard."
+        ),
+    )
+
+    resultado_objetivo = calcular_objetivo_anual(
+        df_polizas, df_facturacion, contrato,
+        anio=_hoy_objetivo.year, mes_hasta=_hoy_objetivo.month, objetivo=objetivo_input,
+    )
+
+    st.metric(
+        f"Producción acumulada en {resultado_objetivo.anio}",
+        f"{resultado_objetivo.produccion_total:,.2f} € de {resultado_objetivo.objetivo:,.2f} €",
+    )
+    st.progress(min(resultado_objetivo.porcentaje / 100, 1.0))
+    st.caption(f"{resultado_objetivo.porcentaje:.1f}% del objetivo anual")
+
+    if resultado_objetivo.meses_incompletos:
+        st.warning(
+            "⚠️ Datos incompletos en: "
+            f"{', '.join(resultado_objetivo.meses_incompletos)} — falta subir "
+            "Facturación y/o Pólizas de esos periodos. El acumulado de arriba "
+            "NO los incluye, así que probablemente sea mayor en realidad."
+        )
+
+    st.divider()
+    st.markdown("### Desglose por tipo y mes")
+    tabla_meses = pd.DataFrame(
+        [
+            {
+                "Periodo": m.periodo,
+                "Salud mensual (€)": m.salud_mensual,
+                "Salud anual (€)": m.salud_anual,
+                "Vida (€)": m.vida,
+                "Total (€)": m.total,
+                "¿Completo?": "✅" if m.completo else "⚠️ faltan datos",
+            }
+            for m in resultado_objetivo.meses
+        ]
+    )
+    fig_objetivo = px.bar(
+        tabla_meses, x="Periodo",
+        y=["Salud mensual (€)", "Salud anual (€)", "Vida (€)"],
+        color_discrete_sequence=[AZUL_ASISA, "#F2A900", "#7DB343"],
+    )
+    st.plotly_chart(fig_objetivo, width="stretch")
+    st.dataframe(tabla_meses, width="stretch", hide_index=True)

@@ -160,3 +160,11 @@ alertas:
                                        # Insights: pólizas de salud mensual a
                                        # menos de estos días de cumplir 1 año
                                        # (paso de % producción a % mantenimiento)
+
+# -----------------------------------------------------------------------------
+# Objetivos propios de Sebastián — no vienen del contrato de ASISA, pero
+# viven aquí para no hardcodear ningún número en el código. Editable desde
+# el dashboard también (cambio de sesión, no persiste en este fichero).
+# -----------------------------------------------------------------------------
+objetivos:
+  produccion_anual: 100000   # € de prima anualizada nueva en el año natural
