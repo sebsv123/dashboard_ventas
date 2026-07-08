@@ -22,6 +22,7 @@ Tres mecánicas distintas, todas validadas contra datos reales de Sebastián
 
 from __future__ import annotations
 
+import calendar
 from dataclasses import dataclass
 from datetime import date
 
@@ -61,14 +62,43 @@ def _pct_comision_salud(contrato: ContratoConfig, razon_social: str, es_primer_a
     return bloque.produccion
 
 
-def _meses_transcurridos(fecha_efecto: date, fecha_referencia: date) -> int:
-    """Nº de meses completos transcurridos entre fecha_efecto y fecha_referencia."""
+def meses_transcurridos(fecha_efecto: date, fecha_referencia: date) -> int:
+    """Nº de meses completos transcurridos entre fecha_efecto y fecha_referencia.
+
+    Pública a propósito: es el único criterio de "¿cuándo cumple 12 meses
+    una póliza?" del proyecto. Cualquier otro módulo que necesite saber si
+    una póliza ya está en año 2+ (p.ej. las alertas de cambio de tarifa de
+    `engine.insights`) debe reutilizar esta función o `fecha_cambio_a_mantenimiento`
+    en vez de reinventar la aritmética de fechas — dos implementaciones
+    distintas del mismo concepto pueden divergir en años bisiestos o fechas
+    de efecto a fin de mes.
+    """
     meses = (fecha_referencia.year - fecha_efecto.year) * 12 + (
         fecha_referencia.month - fecha_efecto.month
     )
     if fecha_referencia.day < fecha_efecto.day:
         meses -= 1
     return max(meses, 0)
+
+
+def fecha_cambio_a_mantenimiento(fecha_efecto: date) -> date:
+    """Primera fecha en la que `meses_transcurridos(fecha_efecto, ref) >= 12`.
+
+    Coincide exactamente con el criterio de `meses_transcurridos` (mismo
+    mes/día un año después), salvo cuando ese día no existe en el mes
+    objetivo (p.ej. una póliza con efecto el 31 de un mes, o el 29 de
+    febrero de un año bisiesto) — en ese caso el criterio de
+    `meses_transcurridos` no se cumple hasta el día 1 del mes siguiente,
+    y esta función refleja lo mismo para no divergir del motor de comisiones.
+    """
+    anio_objetivo = fecha_efecto.year + 1
+    mes_objetivo = fecha_efecto.month
+    ultimo_dia_mes_objetivo = calendar.monthrange(anio_objetivo, mes_objetivo)[1]
+    if fecha_efecto.day <= ultimo_dia_mes_objetivo:
+        return date(anio_objetivo, mes_objetivo, fecha_efecto.day)
+    if mes_objetivo == 12:
+        return date(anio_objetivo + 1, 1, 1)
+    return date(anio_objetivo, mes_objetivo + 1, 1)
 
 
 def _pct_comision_vida(contrato: ContratoConfig, razon_social: str, meses_transcurridos: int) -> float:
@@ -110,14 +140,14 @@ def estimar_comision_poliza(
     # para detectar la ausencia de fecha (se creía comprobado, no lo estaba).
     tiene_fecha_efecto = fecha_efecto is not None and not pd.isna(fecha_efecto)
     ref = fecha_referencia if fecha_referencia is not None else date.today()
-    meses_transcurridos = _meses_transcurridos(fecha_efecto, ref) if tiene_fecha_efecto else 0
-    es_primer_anio = meses_transcurridos < 12
+    meses_desde_efecto = meses_transcurridos(fecha_efecto, ref) if tiene_fecha_efecto else 0
+    es_primer_anio = meses_desde_efecto < 12
     mes_devengo = (
         f"{fecha_efecto.year:04d}-{fecha_efecto.month:02d}" if tiene_fecha_efecto else ""
     )
 
     if tipo == TIPO_VIDA:
-        pct = _pct_comision_vida(contrato, razon_social, meses_transcurridos)
+        pct = _pct_comision_vida(contrato, razon_social, meses_desde_efecto)
         base = prima_recibo_mensual if prima_recibo_mensual is not None else prima_anual / 12
         return EstimacionComision(
             poliza=fila_poliza["poliza"],

@@ -4,6 +4,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from engine.comisiones import fecha_cambio_a_mantenimiento
 from engine.config_contrato import cargar_contrato
 from engine.insights import (
     alertas_cambio_tarifa,
@@ -110,3 +111,15 @@ def test_alertas_cambio_tarifa_solo_salud_mensual_activa_proxima_a_cumplir_anio(
 def test_alertas_cambio_tarifa_vacio_fuera_de_ventana(df_polizas, contrato):
     alertas = alertas_cambio_tarifa(df_polizas, contrato, date(2026, 7, 15))
     assert alertas == []
+
+
+def test_alertas_cambio_tarifa_usa_fecha_cambio_a_mantenimiento_compartida(
+    df_polizas, contrato
+):
+    # La fecha de "cumple 1 año" del aviso debe ser exactamente la misma que
+    # calcula engine.comisiones.fecha_cambio_a_mantenimiento — no una cuenta
+    # de días independiente que pueda desincronizarse.
+    alertas = alertas_cambio_tarifa(df_polizas, contrato, date(2027, 4, 15))
+    esperado = fecha_cambio_a_mantenimiento(date(2026, 6, 1))
+    assert f"Cumple 1 año el {esperado.isoformat()}" in alertas[0].nota
+    assert alertas[0].dias_para_cambio == (esperado - date(2027, 4, 15)).days

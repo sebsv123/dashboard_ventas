@@ -10,15 +10,15 @@ BRIEF_FASE2.md, "fuera de alcance").
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 
 import pandas as pd
 
+from engine.comisiones import fecha_cambio_a_mantenimiento
 from engine.config_contrato import ContratoConfig
 
 MESES_MINIMOS_PARA_TENDENCIA = 2
 DIAS_ANTELACION_CAMBIO_TARIFA = 60
-DIAS_ANIO = 365
 
 COLUMNAS_PRODUCCION = [
     "poliza", "razon_social", "provincia_tomador", "forma_pago",
@@ -173,10 +173,13 @@ def alertas_cambio_tarifa(
         if fecha_efecto_ts is None or pd.isna(fecha_efecto_ts):
             continue
         fecha_efecto = fecha_efecto_ts.date()
-        dias_transcurridos = (fecha_referencia - fecha_efecto).days
-        dias_para_cambio = DIAS_ANIO - dias_transcurridos
+        # Reutiliza el mismo criterio que engine.comisiones para "cumplir 12
+        # meses" — no reinventar la aritmética de fechas con otra lógica que
+        # podría no coincidir (p.ej. una cuenta de 365 días fijos diverge en
+        # años bisiestos o fechas de efecto a fin de mes).
+        aniversario = fecha_cambio_a_mantenimiento(fecha_efecto)
+        dias_para_cambio = (aniversario - fecha_referencia).days
         if 0 < dias_para_cambio <= DIAS_ANTELACION_CAMBIO_TARIFA:
-            aniversario = fecha_efecto + timedelta(days=DIAS_ANIO)
             alertas.append(
                 AlertaCambioTarifa(
                     poliza=fila["poliza"],

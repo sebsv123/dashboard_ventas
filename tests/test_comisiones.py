@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -11,6 +11,8 @@ from engine.comisiones import (
     aplicar_retencion,
     clasificar_poliza,
     estimar_comision_poliza,
+    fecha_cambio_a_mantenimiento,
+    meses_transcurridos,
 )
 from engine.config_contrato import cargar_contrato
 from ingestion.polizas import parsear_polizas
@@ -141,3 +143,31 @@ def test_estimacion_con_fecha_efecto_nat_no_rompe(contrato):
     estimacion = estimar_comision_poliza(fila, contrato, prima_anual=1000.0)
     assert estimacion.mes_devengo == ""
     assert estimacion.comision_bruta_estimada == pytest.approx(250.0)  # primer año, 25%
+
+
+def test_fecha_cambio_a_mantenimiento_coincide_con_meses_transcurridos_caso_normal():
+    fecha_efecto = date(2026, 6, 15)
+    cambio = fecha_cambio_a_mantenimiento(fecha_efecto)
+    assert cambio == date(2027, 6, 15)
+    assert meses_transcurridos(fecha_efecto, cambio - timedelta(days=1)) < 12
+    assert meses_transcurridos(fecha_efecto, cambio) >= 12
+
+
+def test_fecha_cambio_a_mantenimiento_coincide_con_meses_transcurridos_caso_29_febrero():
+    # Fecha de efecto un 29 de febrero (año bisiesto): al año siguiente ese
+    # día no existe. fecha_cambio_a_mantenimiento debe seguir sincronizada
+    # con meses_transcurridos, no con un cálculo de "365 días" a ciegas.
+    fecha_efecto = date(2024, 2, 29)
+    cambio = fecha_cambio_a_mantenimiento(fecha_efecto)
+    assert meses_transcurridos(fecha_efecto, cambio - timedelta(days=1)) < 12
+    assert meses_transcurridos(fecha_efecto, cambio) >= 12
+
+
+def test_fecha_cambio_a_mantenimiento_caso_31_en_mes_de_30():
+    # Efecto el 31 de un mes de 31 días; el año siguiente puede tener un mes
+    # correspondiente con menos días (aquí no aplica para el mismo mes, pero
+    # cubrimos el caso general de "día que no existe en el mes objetivo").
+    fecha_efecto = date(2025, 1, 31)
+    cambio = fecha_cambio_a_mantenimiento(fecha_efecto)
+    assert meses_transcurridos(fecha_efecto, cambio - timedelta(days=1)) < 12
+    assert meses_transcurridos(fecha_efecto, cambio) >= 12
