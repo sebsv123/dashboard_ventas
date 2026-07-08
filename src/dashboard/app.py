@@ -325,8 +325,16 @@ with tab_rappel:
         st.subheader("Histórico de rappel real (confirmado)")
         hist_rappel = df_factura_pdf[df_factura_pdf["rappel"] > 0].sort_values("periodo")
         fig = px.bar(hist_rappel, x="periodo", y="rappel", color_discrete_sequence=[AZUL_ASISA])
-        fig.add_hline(y=1200, line_dash="dash", annotation_text="Máximo (1.200€)")
-        fig.add_hline(y=300, line_dash="dot", annotation_text="Mínimo (300€)")
+        rappel_maximo = contrato.rappel_inicial.maximo
+        rappel_minimo = contrato.rappel_inicial.minimo
+        fig.add_hline(
+            y=rappel_maximo, line_dash="dash",
+            annotation_text=f"Máximo ({rappel_maximo:,.0f}€)",
+        )
+        fig.add_hline(
+            y=rappel_minimo, line_dash="dot",
+            annotation_text=f"Mínimo ({rappel_minimo:,.0f}€)",
+        )
         st.plotly_chart(fig, use_container_width=True)
 
 # =============================================================================
