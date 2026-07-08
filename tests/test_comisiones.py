@@ -93,7 +93,11 @@ def test_estimacion_salud_segundo_anio_por_antiguedad(contrato):
     estimacion = estimar_comision_poliza(
         fila, contrato, prima_anual=1000.0, fecha_referencia=date(2026, 7, 15)
     )
-    assert estimacion.comision_bruta_estimada == pytest.approx(200.0)
+    assert estimacion.comision_bruta_estimada == pytest.approx(200.0)  # el número no cambia
+    # Confianza baja a "media" en año 2+: el % de esta rama nunca se ha
+    # contrastado contra una Liquidación real (ver nota en _pct_comision_salud).
+    assert estimacion.confianza == "media"
+    assert "no está confirmado" in estimacion.nota
 
 
 def test_estimacion_salud_mensual_segundo_anio_por_antiguedad(contrato):
@@ -106,6 +110,7 @@ def test_estimacion_salud_mensual_segundo_anio_por_antiguedad(contrato):
     )
     assert estimacion.comision_bruta_estimada == pytest.approx(72.0)  # 360 * 0.20
     assert estimacion.confianza == "media"  # ya era "media" por ser mensual
+    assert "no está confirmado" in estimacion.nota
 
 
 def test_estimacion_vida_escalado_primer_anio(contrato):

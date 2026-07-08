@@ -55,6 +55,25 @@ def clasificar_poliza(fila_poliza: pd.Series, contrato: ContratoConfig) -> str:
 
 
 def _pct_comision_salud(contrato: ContratoConfig, razon_social: str, es_primer_anio: bool) -> float:
+    # NOTA IMPORTANTE (sin resolver): el campo `.mantenimiento` de cada
+    # bloque de comisiones_salud en config/contrato.yaml no se lee en NINGÚN
+    # sitio del código — aquí siempre se devuelve `.produccion`, tanto para
+    # `primer_anio` como para `segundo_anio_en_adelante`.
+    #
+    # La idea original al diseñar el proyecto fue "año 2 en adelante = %
+    # de mantenimiento", pero eso NUNCA se ha contrastado contra una
+    # Liquidación real — a diferencia del resto de reglas de este motor,
+    # que sí están validadas con datos reales del agente (ver docstring del
+    # módulo). Existe una lectura alternativa igual de plausible: que el
+    # contrato distinga "nuevas altas" (% de producción) de "cambios de
+    # mediador en pólizas ya existentes" (% de mantenimiento), es decir,
+    # que "mantenimiento" no dependa de la antigüedad de la póliza sino de
+    # si es un traspaso de otro mediador — algo que este motor no modela
+    # todavía. No tocar esta función hasta tener un dato real de Liquidación
+    # de una póliza de Salud con más de 12 meses que lo confirme o lo
+    # descarte. Mientras tanto, ver `es_primer_anio` en `estimar_comision_poliza`:
+    # cuando es False, la confianza de la estimación baja a "media" para
+    # dejar claro que ese % no está confirmado.
     tabla = contrato.comisiones_salud.get(razon_social)
     if tabla is None:
         return 0.0
@@ -158,35 +177,53 @@ def estimar_comision_poliza(
             nota="Vida: comisión por recibo, sin rappel.",
         )
 
+    # Nota de confianza pendiente para cualquier póliza de Salud en año 2+:
+    # el % que se aplica en ese caso (ver _pct_comision_salud) nunca se ha
+    # contrastado contra una Liquidación real. El importe no cambia por
+    # esto, solo se marca la estimación como menos segura hasta validarlo.
+    nota_pendiente_ano2 = (
+        "Póliza en año 2+: el % aplicado no está confirmado con datos "
+        "reales todavía — pendiente de validar contra una Liquidación real "
+        "de una póliza con más de 12 meses."
+    )
+
     if tipo == TIPO_SALUD_ANUAL:
         pct = _pct_comision_salud(contrato, razon_social, es_primer_anio)
+        if es_primer_anio:
+            confianza = "alta"
+            nota = "Salud prepago anual: comisión íntegra en el mes de efecto."
+        else:
+            confianza = "media"
+            nota = f"Salud prepago anual: póliza en año 2+, % de mantenimiento. {nota_pendiente_ano2}"
         return EstimacionComision(
             poliza=fila_poliza["poliza"],
             tipo=tipo,
             mes_devengo=mes_devengo,
             comision_bruta_estimada=round(prima_anual * pct, 2),
-            confianza="alta",
-            nota=(
-                "Salud prepago anual: comisión íntegra en el mes de efecto."
-                if es_primer_anio
-                else "Salud prepago anual: póliza en año 2+, % de mantenimiento."
-            ),
+            confianza=confianza,
+            nota=nota,
         )
 
     # TIPO_SALUD_MENSUAL
     pct = _pct_comision_salud(contrato, razon_social, es_primer_anio)
+    nota_mensual = (
+        "Salud mensual: anticipo estimado en el mes del primer recibo. "
+        "Los meses 2-12 de esta misma póliza no deberían sumar comisión "
+        "nueva, pero el mecanismo exacto de regularización de ASISA no "
+        "está cerrado al 100% — confirmar siempre contra Liquidación real."
+    )
+    if not es_primer_anio:
+        nota_mensual = f"{nota_mensual} {nota_pendiente_ano2}"
     return EstimacionComision(
         poliza=fila_poliza["poliza"],
         tipo=tipo,
         mes_devengo=mes_devengo,
         comision_bruta_estimada=round(prima_anual * pct, 2),
+        # La mecánica mensual ya era "media" independientemente del año
+        # (por la incertidumbre de la regularización de ASISA); el año 2+
+        # no la baja más, pero sí añade el aviso en la nota.
         confianza="media",
-        nota=(
-            "Salud mensual: anticipo estimado en el mes del primer recibo. "
-            "Los meses 2-12 de esta misma póliza no deberían sumar comisión "
-            "nueva, pero el mecanismo exacto de regularización de ASISA no "
-            "está cerrado al 100% — confirmar siempre contra Liquidación real."
-        ),
+        nota=nota_mensual,
     )
 
 
