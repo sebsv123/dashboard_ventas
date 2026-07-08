@@ -40,6 +40,8 @@ class _FacturaPdfFalsa:
         periodo="2026-06",
         rappel=900.0,
         total_factura=1500.0,
+        irpf=-100.0,
+        base_factura=1600.0,
     ):
         self.entidad_cif = entidad_cif
         self.entidad_nombre = entidad_nombre
@@ -50,8 +52,10 @@ class _FacturaPdfFalsa:
         self.totales = {
             "total_liquidacion": 1000.0,
             "total_factura": total_factura,
-            "irpf": 100.0,
-            "base_factura": 1600.0,
+            # OJO: en las facturas PDF reales, irpf se guarda en NEGATIVO
+            # (base_factura + irpf = total_factura) — ver engine/fiscal.py.
+            "irpf": irpf,
+            "base_factura": base_factura,
         }
 
 
@@ -242,3 +246,37 @@ def test_dashboard_no_revienta_con_polizas_y_liquidacion_sin_facturacion(tmp_pat
 
     at = _correr_app(db_path, monkeypatch)
     assert at.exception == []
+
+
+def test_tab_irpf_suma_retenciones_de_2_meses_y_2_entidades(tmp_path, monkeypatch):
+    db_path, conn = _nueva_db(tmp_path, "irpf_2_meses_2_entidades.db")
+    cargar_facturacion(conn, parsear_facturacion(FIXTURES / "facturacion_sample.csv"))
+    cargar_factura_pdf(
+        conn,
+        [
+            _FacturaPdfFalsa(
+                entidad_cif="A08169294", numero_factura="F-S-05", periodo="2026-05",
+                irpf=-310.94, base_factura=2072.94, total_factura=1762.00,
+            ),
+            _FacturaPdfFalsa(
+                entidad_cif="A87425070", numero_factura="F-V-05", periodo="2026-05",
+                irpf=-1.07, base_factura=7.13, total_factura=6.06,
+            ),
+            _FacturaPdfFalsa(
+                entidad_cif="A08169294", numero_factura="F-S-06", periodo="2026-06",
+                irpf=-367.57, base_factura=2450.46, total_factura=2082.89,
+            ),
+            _FacturaPdfFalsa(
+                entidad_cif="A87425070", numero_factura="F-V-06", periodo="2026-06",
+                irpf=-19.32, base_factura=128.77, total_factura=109.45,
+            ),
+        ],
+    )
+    conn.close()
+
+    at = _correr_app(db_path, monkeypatch)
+    assert at.exception == []
+
+    metricas = {m.label: m.value for m in at.metric}
+    etiqueta_total = next(k for k in metricas if k.startswith("Total retenido en"))
+    assert metricas[etiqueta_total] == "698.90 €"  # 310.94+1.07+367.57+19.32

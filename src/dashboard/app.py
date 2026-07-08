@@ -28,6 +28,7 @@ from db.carga import (
 from db.schema import conectar, inicializar_schema
 from engine.comisiones import estimar_comision_poliza
 from engine.config_contrato import cargar_contrato
+from engine.fiscal import anios_disponibles, calcular_retenciones_anio
 from engine.insights import (
     alertas_cambio_tarifa,
     construir_produccion_polizas,
@@ -257,8 +258,8 @@ if df_polizas.empty and df_facturacion.empty:
 #   - Insights: todo el histórico (como Resumen), pero al agrupar "por mes"
 #     también usa periodo_liquidacion vía construir_produccion_polizas,
 #     por la misma razón que Rappel.
-tab_resumen, tab_polizas, tab_rappel, tab_alertas, tab_insights = st.tabs(
-    ["📊 Resumen", "📋 Pólizas", "🎯 Rappel", "⚠️ Alertas", "📈 Insights"]
+tab_resumen, tab_polizas, tab_rappel, tab_alertas, tab_insights, tab_irpf = st.tabs(
+    ["📊 Resumen", "📋 Pólizas", "🎯 Rappel", "⚠️ Alertas", "📈 Insights", "💶 Retenciones IRPF"]
 )
 
 # =============================================================================
@@ -574,4 +575,69 @@ with tab_insights:
             st.warning(
                 f"Póliza {a.poliza} ({a.razon_social}): {a.dias_para_cambio} días "
                 f"para el cambio de tarifa. {a.nota}"
+            )
+
+# =============================================================================
+# TAB: Retenciones IRPF
+# =============================================================================
+with tab_irpf:
+    st.subheader("Retenciones IRPF ya practicadas")
+    st.caption(
+        "Dato real, tomado de las Facturas PDF ya confirmadas — pensado para "
+        "anticipar la declaración de la renta del año siguiente con una cifra "
+        "consultable. Esto NO es asesoría fiscal: no se calcula IRPF a pagar "
+        "ni se proyecta nada, solo se suma lo que ya consta como retenido."
+    )
+
+    if df_factura_pdf.empty:
+        st.info("Sube al menos una Factura PDF para ver las retenciones.")
+    else:
+        anios = anios_disponibles(df_factura_pdf)
+        anio_actual = str(date.today().year)
+        indice_default = anios.index(anio_actual) if anio_actual in anios else 0
+        anio_sel = st.selectbox("Año fiscal", anios, index=indice_default)
+
+        retencion = calcular_retenciones_anio(df_factura_pdf, anio_sel)
+
+        if retencion.desglose_mensual.empty:
+            st.info(f"Todavía no hay Facturas PDF de {anio_sel}.")
+        else:
+            c1, c2, c3 = st.columns(3)
+            c1.metric(f"Total retenido en {anio_sel}", f"{retencion.total_retenido:,.2f} €")
+            c2.metric("Base factura total", f"{retencion.total_base:,.2f} €")
+            c3.metric("Total factura neto", f"{retencion.total_factura_neto:,.2f} €")
+
+            st.divider()
+            st.markdown("### Desglose mensual")
+            fig_irpf = px.bar(
+                retencion.desglose_mensual, x="periodo", y="irpf_retenido",
+                color_discrete_sequence=[AZUL_ASISA],
+                labels={"periodo": "Periodo", "irpf_retenido": "IRPF retenido (€)"},
+            )
+            st.plotly_chart(fig_irpf, width="stretch")
+            st.dataframe(
+                retencion.desglose_mensual.rename(
+                    columns={
+                        "periodo": "Periodo",
+                        "base_factura": "Base factura (€)",
+                        "irpf_retenido": "IRPF retenido (€)",
+                        "total_factura": "Total factura neto (€)",
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+
+            st.markdown("### Desglose por entidad")
+            st.dataframe(
+                retencion.desglose_entidad.rename(
+                    columns={
+                        "entidad_nombre": "Entidad",
+                        "base_factura": "Base factura (€)",
+                        "irpf_retenido": "IRPF retenido (€)",
+                        "total_factura": "Total factura neto (€)",
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
             )
