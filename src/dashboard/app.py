@@ -5,6 +5,7 @@ Arranque: uv run streamlit run src/dashboard/app.py
 
 from __future__ import annotations
 
+import calendar
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -20,6 +21,7 @@ from db.carga import cargar_facturacion, cargar_liquidacion, cargar_polizas, car
 from db.schema import conectar, inicializar_schema
 from engine.comisiones import estimar_comision_poliza
 from engine.config_contrato import cargar_contrato
+from engine.proyeccion import proyectar_cierre_mes
 from engine.rappel import calcular_rappel_inicial
 from engine.reconciliacion import detectar_polizas_sin_cobrar
 from ingestion.facturacion import parsear_facturacion
@@ -279,6 +281,27 @@ with tab_rappel:
 
     st.progress(min(resultado_rappel.porcentaje_objetivo / 100, 1.0))
     st.caption(f"{resultado_rappel.porcentaje_objetivo:.1f}% del objetivo del tramo actual")
+
+    # Proyección de cierre de mes: solo tiene sentido para el mes en curso
+    # (esta pestaña, de momento, siempre calcula sobre "hoy").
+    st.divider()
+    st.subheader("Proyección de cierre de mes")
+    dias_totales_mes = calendar.monthrange(hoy.year, hoy.month)[1]
+    proyeccion = proyectar_cierre_mes(
+        produccion_acumulada_hasta_hoy=produccion_salud,
+        dia_actual_del_mes=hoy.day,
+        dias_totales_del_mes=dias_totales_mes,
+        contrato=contrato,
+        fecha_referencia=hoy,
+    )
+    cp1, cp2 = st.columns(2)
+    cp1.metric("Producción proyectada a fin de mes", f"{proyeccion.produccion_proyectada:,.2f} €")
+    cp2.metric("Rappel proyectado a ese ritmo", f"{proyeccion.rappel_proyectado.importe:,.2f} €")
+    st.info(f"📈 {proyeccion.mensaje}")
+    st.caption(
+        "Proyección estadística simple (ritmo diario medio × días del mes), "
+        "no una predicción garantizada — nunca sustituye al dato real de Liquidación."
+    )
 
     if not df_factura_pdf.empty:
         st.divider()
