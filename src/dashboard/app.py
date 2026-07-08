@@ -91,67 +91,9 @@ def get_contrato():
 conn = get_conn()
 contrato = get_contrato()
 
-# --- Cabecera -----------------------------------------------------------------
-col_logo, col_titulo = st.columns([1, 4])
-with col_logo:
-    if LOGO_PATH.exists():
-        st.image(str(LOGO_PATH), width=160)
-with col_titulo:
-    st.title("Panel Sebastián · Agente Exclusivo")
-    st.caption("Comisiones y rappel — ASISA / ASISA VIDA")
-
-# --- Sidebar: subida de ficheros ----------------------------------------------
-with st.sidebar:
-    if LOGO_PATH.exists():
-        st.image(str(LOGO_PATH), width=120)
-    st.header("Subir ficheros")
-
-    st.subheader("Semanal")
-    f_facturacion = st.file_uploader("Facturación (CSV)", type="csv", key="facturacion")
-    f_polizas = st.file_uploader("Pólizas (CSV)", type="csv", key="polizas")
-
-    st.subheader("Mensual (cuando ASISA liquide)")
-    f_liquidacion = st.file_uploader("Liquidación (CSV)", type="csv", key="liquidacion")
-    f_factura_pdf = st.file_uploader("Factura (PDF)", type="pdf", key="factura_pdf")
-
-    if st.button("Procesar ficheros subidos", type="primary", width="stretch"):
-        mensajes = []
-        try:
-            if f_facturacion:
-                df = parsear_facturacion(f_facturacion)
-                n = cargar_facturacion(conn, df)
-                mensajes.append(f"Facturación: {n} filas nuevas importadas.")
-            if f_polizas:
-                df = parsear_polizas(f_polizas)
-                n = cargar_polizas(conn, df)
-                mensajes.append(f"Pólizas: {n} registros actualizados.")
-            if f_liquidacion:
-                df = parsear_liquidacion(f_liquidacion)
-                n = cargar_liquidacion(conn, df)
-                mensajes.append(f"Liquidación: {n} filas nuevas importadas.")
-            if f_factura_pdf:
-                facturas = parsear_factura_pdf(f_factura_pdf)
-                n = cargar_factura_pdf(conn, facturas)
-                mensajes.append(f"Factura PDF: {n} entidad(es) importada(s).")
-            if not mensajes:
-                st.warning("No has seleccionado ningún fichero.")
-            else:
-                recalcular_resumen_mensual(conn, contrato)
-            for m in mensajes:
-                st.success(m)
-            st.cache_data.clear()
-        except ValueError as e:
-            st.error(f"Error al procesar: {e}")
-
-    st.divider()
-    st.caption(
-        "Los ficheros de Facturación/Pólizas dan una vista **estimada** "
-        "en tiempo casi real. La Liquidación/Factura mensual es la que "
-        "confirma los números **reales**."
-    )
-
-
 # --- Carga de datos desde la BD ------------------------------------------------
+# Se hace ANTES del sidebar para poder mostrar ahí el resumen de "ficheros
+# ya cargados" (qué periodos hay de cada tipo).
 @st.cache_data(ttl=60)
 def cargar_datos():
     polizas = pd.read_sql("SELECT * FROM polizas", conn, parse_dates=["fecha_emision", "fecha_efecto", "fecha_baja"])
@@ -162,6 +104,137 @@ def cargar_datos():
 
 
 df_polizas, df_facturacion, df_liquidacion, df_factura_pdf = cargar_datos()
+
+# --- Cabecera -----------------------------------------------------------------
+col_logo, col_titulo = st.columns([1, 4])
+with col_logo:
+    if LOGO_PATH.exists():
+        st.image(str(LOGO_PATH), width=160)
+with col_titulo:
+    st.title("Panel Sebastián · Agente Exclusivo")
+    st.caption("Comisiones y rappel — ASISA / ASISA VIDA")
+
+
+def _formatear_periodos(periodos: list[str]) -> str:
+    """"2026-04","2026-05","2026-07" -> "04, 05, 07-2026". Agrupa por año
+    para que quede compacto cuando (lo normal) todos los periodos son del
+    mismo año.
+
+    OJO: Facturación/Factura PDF usan "AAAA-MM" pero Liquidación, en los
+    ficheros reales de ASISA, usa "MM-AAAA" (confirmado con datos reales:
+    "02-2026") — formatos distintos para el mismo concepto de columna
+    "PER. LIQUIDACION". Se detecta cuál es cuál por longitud (4 dígitos es
+    el año) en vez de asumir un orden fijo.
+    """
+    if not periodos:
+        return "ninguno todavía"
+    por_anio: dict[str, list[str]] = {}
+    invalidos: list[str] = []
+    for p in sorted(set(periodos)):
+        partes = p.split("-")
+        if len(partes) != 2:
+            invalidos.append(p)
+            continue
+        a, b = partes
+        anio, mes = (a, b) if len(a) == 4 else (b, a)
+        por_anio.setdefault(anio, []).append(mes)
+    texto = "; ".join(
+        f"{', '.join(sorted(meses))}-{anio}" for anio, meses in sorted(por_anio.items())
+    )
+    if invalidos:
+        texto = f"{texto}; {', '.join(invalidos)}" if texto else ", ".join(invalidos)
+    return texto
+
+
+# --- Sidebar: subida de ficheros ----------------------------------------------
+# uploader_key se incrementa tras cada "Procesar" con éxito: cambiar la key
+# de un file_uploader es la forma de vaciarlo (Streamlit no tiene un método
+# directo para "limpiar" un uploader ya montado).
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
+if "mensajes_pendientes" not in st.session_state:
+    st.session_state.mensajes_pendientes = []
+
+with st.sidebar:
+    if LOGO_PATH.exists():
+        st.image(str(LOGO_PATH), width=120)
+    st.header("Subir ficheros")
+
+    # Mensajes de éxito de la subida anterior (se guardan en session_state
+    # porque el rerun que vacía los uploaders borra las variables locales).
+    for m in st.session_state.mensajes_pendientes:
+        st.success(m)
+    st.session_state.mensajes_pendientes = []
+
+    uk = st.session_state.uploader_key
+    st.subheader("Semanal")
+    f_facturacion = st.file_uploader(
+        "Facturación (CSV)", type="csv", accept_multiple_files=True, key=f"facturacion_{uk}"
+    )
+    f_polizas = st.file_uploader(
+        "Pólizas (CSV)", type="csv", accept_multiple_files=True, key=f"polizas_{uk}"
+    )
+
+    st.subheader("Mensual (cuando ASISA liquide)")
+    f_liquidacion = st.file_uploader(
+        "Liquidación (CSV)", type="csv", accept_multiple_files=True, key=f"liquidacion_{uk}"
+    )
+    f_factura_pdf = st.file_uploader(
+        "Factura (PDF)", type="pdf", accept_multiple_files=True, key=f"factura_pdf_{uk}"
+    )
+
+    if st.button("Procesar ficheros subidos", type="primary", width="stretch"):
+        mensajes = []
+        try:
+            for f in f_facturacion:
+                df = parsear_facturacion(f)
+                n = cargar_facturacion(conn, df)
+                mensajes.append(f"Facturación ({f.name}): {n} filas nuevas importadas.")
+            for f in f_polizas:
+                df = parsear_polizas(f)
+                n = cargar_polizas(conn, df)
+                mensajes.append(f"Pólizas ({f.name}): {n} registros actualizados.")
+            for f in f_liquidacion:
+                df = parsear_liquidacion(f)
+                n = cargar_liquidacion(conn, df)
+                mensajes.append(f"Liquidación ({f.name}): {n} filas nuevas importadas.")
+            for f in f_factura_pdf:
+                facturas = parsear_factura_pdf(f)
+                n = cargar_factura_pdf(conn, facturas)
+                mensajes.append(f"Factura PDF ({f.name}): {n} entidad(es) importada(s).")
+
+            if not mensajes:
+                st.warning("No has seleccionado ningún fichero.")
+            else:
+                recalcular_resumen_mensual(conn, contrato)
+                st.cache_data.clear()
+                # Vacía los uploaders (nueva key) y conserva los mensajes de
+                # éxito para mostrarlos justo después del rerun.
+                st.session_state.mensajes_pendientes = mensajes
+                st.session_state.uploader_key += 1
+                st.rerun()
+        except ValueError as e:
+            st.error(f"Error al procesar: {e}")
+
+    with st.expander("📂 Ficheros ya cargados"):
+        st.caption(f"**Facturación:** {_formatear_periodos(list(df_facturacion['periodo_liquidacion'].dropna().unique())) if not df_facturacion.empty else 'ninguno todavía'}")
+        st.caption(f"**Liquidación:** {_formatear_periodos(list(df_liquidacion['periodo_liquidacion'].dropna().unique())) if not df_liquidacion.empty else 'ninguno todavía'}")
+        st.caption(f"**Factura PDF:** {_formatear_periodos(list(df_factura_pdf['periodo'].dropna().unique())) if not df_factura_pdf.empty else 'ninguno todavía'}")
+        if df_polizas.empty:
+            st.caption("**Pólizas:** ninguna todavía")
+        else:
+            ultima_actualizacion = str(df_polizas["fecha_import"].max())[:19]
+            st.caption(
+                f"**Pólizas:** {len(df_polizas)} en cartera (foto completa, "
+                f"sin periodos propios) · última actualización {ultima_actualizacion}"
+            )
+
+    st.divider()
+    st.caption(
+        "Los ficheros de Facturación/Pólizas dan una vista **estimada** "
+        "en tiempo casi real. La Liquidación/Factura mensual es la que "
+        "confirma los números **reales**."
+    )
 
 if df_polizas.empty and df_facturacion.empty:
     st.info(
@@ -195,13 +268,37 @@ with tab_resumen:
     st.subheader("Resumen general (cartera completa, sin filtro de periodo)")
 
     polizas_activas = df_polizas[df_polizas["situacion"] == "A"]
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2 = st.columns(2)
     c1.metric("Pólizas activas", len(polizas_activas))
     c2.metric("Provincias distintas", df_polizas["provincia_tomador"].nunique())
+
     if not df_factura_pdf.empty:
-        ultimo = df_factura_pdf.sort_values("periodo").iloc[-1]
-        c3.metric("Último rappel confirmado", f"{ultimo['rappel']:.2f} €")
-        c4.metric("Última factura total", f"{ultimo['total_factura']:.2f} €")
+        st.markdown("**Última factura confirmada, por entidad**")
+        st.caption(
+            "Siempre por separado: ASISA Salud y ASISA Vida son facturas "
+            "independientes con su propio periodo — Vida nunca tiene "
+            "rappel, y mezclarlas en una sola cifra puede coger la entidad "
+            "equivocada si ambas están disponibles para el mismo mes."
+        )
+        cols_entidad = st.columns(len(contrato.entidades))
+        for col, datos_entidad in zip(cols_entidad, contrato.entidades.values()):
+            facturas_entidad = df_factura_pdf[
+                df_factura_pdf["entidad_cif"] == datos_entidad["razon_social_cif"]
+            ]
+            nombre = datos_entidad["nombre"]
+            if facturas_entidad.empty:
+                col.metric(nombre, "Sin facturas todavía")
+                continue
+            ultimo = facturas_entidad.sort_values("periodo").iloc[-1]
+            if datos_entidad["tiene_rappel"]:
+                ayuda = f"Rappel de {ultimo['periodo']}: {ultimo['rappel']:.2f} €"
+            else:
+                ayuda = "Esta entidad nunca tiene rappel (no existe ese Anexo en su contrato)."
+            col.metric(
+                f"{nombre} · {ultimo['periodo']}",
+                f"{ultimo['total_factura']:.2f} €",
+                help=ayuda,
+            )
 
     st.divider()
     st.subheader("Producción por provincia")

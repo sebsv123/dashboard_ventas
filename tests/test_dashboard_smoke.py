@@ -32,14 +32,27 @@ FIXTURES = Path(__file__).parent / "fixtures"
 class _FacturaPdfFalsa:
     """Sustituto mínimo de FacturaEntidad para no depender de un PDF real."""
 
-    def __init__(self):
-        self.entidad_cif = "A08169294"
-        self.entidad_nombre = "ASISA"
-        self.numero_factura = "F-2026-06"
+    def __init__(
+        self,
+        entidad_cif="A08169294",
+        entidad_nombre="ASISA",
+        numero_factura="F-2026-06",
+        periodo="2026-06",
+        rappel=900.0,
+        total_factura=1500.0,
+    ):
+        self.entidad_cif = entidad_cif
+        self.entidad_nombre = entidad_nombre
+        self.numero_factura = numero_factura
         self.fecha_factura = "2026-07-01"
-        self.periodo = "2026-06"
-        self.rappel = 900.0
-        self.totales = {"total_liquidacion": 1000.0, "total_factura": 1500.0, "irpf": 100.0, "base_factura": 1600.0}
+        self.periodo = periodo
+        self.rappel = rappel
+        self.totales = {
+            "total_liquidacion": 1000.0,
+            "total_factura": total_factura,
+            "irpf": 100.0,
+            "base_factura": 1600.0,
+        }
 
 
 def _nueva_db(tmp_path, nombre) -> Path:
@@ -165,6 +178,57 @@ def test_rappel_cuenta_poliza_de_fin_de_mes_en_su_periodo_real(tmp_path, monkeyp
     # producción del mes EN CURSO (periodo_liquidacion), aunque fecha_efecto
     # caiga en el mes calendario anterior.
     assert metricas["Producción estimada del mes"] == "480.00 €"
+
+
+def test_resumen_no_mezcla_rappel_de_salud_y_vida(tmp_path, monkeypatch):
+    """Caso real confirmado (junio 2026): ASISA Salud rappel=1.200€,
+    factura=2.082,89€; ASISA Vida rappel=0€ (nunca aplica), factura=109,45€,
+    mismas periodo "2026-06". Antes del fix, el Resumen mostraba
+    df_factura_pdf.sort_values("periodo").iloc[-1]: con ambas filas
+    empatadas en periodo, el desempate dependía del orden de inserción y
+    podía coger la fila de Vida donde tocaba mostrar la de Salud (o al
+    revés) — "a veces sale bien, a veces mal". Ahora deben aparecer
+    siempre las dos, con su nombre, sin mezclarse.
+    """
+    db_path, conn = _nueva_db(tmp_path, "resumen_salud_y_vida.db")
+    # Hace falta al menos Facturación o Pólizas para pasar la pantalla de
+    # "todavía no hay datos cargados" y llegar a renderizar el Resumen.
+    cargar_facturacion(conn, parsear_facturacion(FIXTURES / "facturacion_sample.csv"))
+    cargar_factura_pdf(
+        conn,
+        [
+            _FacturaPdfFalsa(
+                entidad_cif="A08169294",  # ASISA salud
+                numero_factura="F-SALUD-2026-06",
+                periodo="2026-06",
+                rappel=1200.0,
+                total_factura=2082.89,
+            ),
+            _FacturaPdfFalsa(
+                entidad_cif="A87425070",  # ASISA VIDA
+                numero_factura="F-VIDA-2026-06",
+                periodo="2026-06",
+                rappel=0.0,
+                total_factura=109.45,
+            ),
+        ],
+    )
+    conn.close()
+
+    at = _correr_app(db_path, monkeypatch)
+    assert at.exception == []
+
+    metricas = {m.label: m.value for m in at.metric}
+    etiqueta_salud = next(k for k in metricas if "ASISA, Asistencia" in k)
+    etiqueta_vida = next(k for k in metricas if "ASISA VIDA" in k)
+
+    assert metricas[etiqueta_salud] == "2082.89 €"
+    assert metricas[etiqueta_vida] == "109.45 €"
+    # Los helps de los metric() llevan el rappel de cada entidad — Vida
+    # nunca debe aparecer con el rappel de Salud ni viceversa.
+    ayudas = {m.label: m.help for m in at.metric}
+    assert "1200.00" in ayudas[etiqueta_salud]
+    assert "nunca tiene rappel" in ayudas[etiqueta_vida]
 
 
 def test_dashboard_no_revienta_con_polizas_y_liquidacion_sin_facturacion(tmp_path, monkeypatch):
