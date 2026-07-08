@@ -1,0 +1,23 @@
+# Datos reales de clientes — NUNCA deben subirse al repositorio (RGPD)
+data/raw/*
+data/processed/*
+data/asisa.db
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Entornos y cachés de Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,158 @@
+# =============================================================================
+# Configuración del contrato de Agente Exclusivo — ASISA / ASISA VIDA
+# Vigente desde: 2025-12-01
+#
+# Este fichero es la ÚNICA fuente de verdad sobre porcentajes y reglas.
+# Si ASISA cambia condiciones (avisan con 2 meses de antelación según el
+# contrato), edita este fichero y versiónalo en git — así queda trazabilidad
+# de qué reglas aplicaban a qué periodo.
+# =============================================================================
+
+vigencia:
+  inicio_contrato: "2025-12-01"
+  meses_formacion: 2          # mes 1 (dic) y mes 2 (ene): rappel plano, sin objetivo
+
+fiscal:
+  retencion_irpf: 0.15        # se aplica sobre (comisiones + rappel) juntos
+
+entidades:
+  asisa_salud:
+    razon_social_cif: "A08169294"
+    nombre: "ASISA, Asistencia Sanitaria Interprovincial de Seguros, S.A."
+    tiene_rappel: true
+  asisa_vida:
+    razon_social_cif: "A87425070"
+    nombre: "ASISA VIDA SEGUROS, S.A.U."
+    tiene_rappel: false       # el Anexo de rappel no existe en este contrato
+
+# -----------------------------------------------------------------------------
+# Comisiones por producto — entidad ASISA (Salud), Anexo I
+# -----------------------------------------------------------------------------
+comisiones_salud:
+  # clave = valor de RAZON SOCIAL / NOMBRE CLIENTE en los ficheros de ASISA
+  "ASISA PARTICULARES":
+    primer_anio: { produccion: 0.25, mantenimiento: 0.05 }
+    segundo_anio_en_adelante: { produccion: 0.20, mantenimiento: 0.05 }
+  "ASISA RED SANITARIA":
+    # mismo grupo comercial que ASISA PARTICULARES (Salud Particular/Internacional)
+    primer_anio: { produccion: 0.25, mantenimiento: 0.05 }
+    segundo_anio_en_adelante: { produccion: 0.20, mantenimiento: 0.05 }
+  "ASISA TRAVEL AND YOU":
+    primer_anio: { produccion: 0.20, mantenimiento: 0.00 }
+    segundo_anio_en_adelante: { produccion: 0.00, mantenimiento: 0.00 }
+  "ASISA INTEGRAL":
+    primer_anio: { produccion: 0.20, mantenimiento: 0.05 }
+    segundo_anio_en_adelante: { produccion: 0.20, mantenimiento: 0.05 }
+  "ASISA PYMES":
+    primer_anio: { produccion: 0.20, mantenimiento: 0.05 }
+    segundo_anio_en_adelante: { produccion: 0.15, mantenimiento: 0.05 }
+  "ACCIDENTES":
+    primer_anio: { produccion: 0.25, mantenimiento: 0.20 }
+    segundo_anio_en_adelante: { produccion: 0.25, mantenimiento: 0.20 }
+  "DECESOS":
+    primer_anio: { produccion: 0.60, mantenimiento: 0.20 }
+    segundo_anio_en_adelante: { produccion: 0.60, mantenimiento: 0.20 }
+  "DENTAL":
+    primer_anio: { produccion: 0.25, mantenimiento: 0.10 }
+    segundo_anio_en_adelante: { produccion: 0.20, mantenimiento: 0.10 }
+  "HOSPITALIZACION":
+    primer_anio: { produccion: 0.25, mantenimiento: 0.05 }
+    segundo_anio_en_adelante: { produccion: 0.20, mantenimiento: 0.05 }
+  "MASCOTAS":
+    primer_anio: { produccion: 0.30, mantenimiento: 0.15 }
+    segundo_anio_en_adelante: { produccion: 0.30, mantenimiento: 0.15 }
+
+# -----------------------------------------------------------------------------
+# Comisiones por producto — entidad ASISA VIDA, Anexo I
+# -----------------------------------------------------------------------------
+comisiones_vida:
+  "ASISA VIDA TRANQUILIDAD":
+    produccion: 0.60
+    mantenimiento: 0.20
+  "ASISA VIDA TRANQUILIDAD HIPOTECA":
+    produccion: 0.40
+    mantenimiento: 0.45
+  "ASISA VIDA ACCIDENTES SENIOR":
+    produccion: 0.35
+    mantenimiento: 0.35
+  "AV ACCIDENTES SENIOR":       # alias visto en ficheros reales
+    produccion: 0.35
+    mantenimiento: 0.35
+  "ASISA AV ACCIDENTES COMPROMISO 10":
+    primer_anio: 0.20
+    segundo_anio: 0.30
+    tercer_anio_en_adelante: 0.40
+
+# -----------------------------------------------------------------------------
+# Códigos de PRODUCTO conocidos (fichero Pólizas) — se van ampliando según
+# aparezcan nuevos en tus exportaciones. "forma_pago" confirmado con datos reales.
+# -----------------------------------------------------------------------------
+codigos_producto:
+  "101049": { nombre: "ASISA Particulares (mensual)", forma_pago_esperada: "M" }
+  "101047": { nombre: "ASISA Particulares (mensual)", forma_pago_esperada: "M" }
+  "101061": { nombre: "ASISA Health Students/Residents (anual)", forma_pago_esperada: "A" }
+  "408017": { nombre: "ASISA Vida Tranquilidad", forma_pago_esperada: null }  # vista en A y M
+  "101086": { nombre: "ASISA Red Sanitaria", forma_pago_esperada: "M" }
+  "101092": { nombre: "ASISA Particulares (variante anual)", forma_pago_esperada: "A" }
+  "306202": { nombre: "AV Accidentes Senior", forma_pago_esperada: "A" }
+
+# -----------------------------------------------------------------------------
+# Rappel — Anexo II
+# -----------------------------------------------------------------------------
+rappel:
+  # Rappel mensual inicial (Anexo II, punto 1)
+  inicial:
+    tramos:
+      # meses relativos al inicio del contrato (mes 1 = dic 2025)
+      - { desde_mes: 1,  hasta_mes: 12, objetivo_prima_anualizada_mes: 2500 }
+      - { desde_mes: 13, hasta_mes: 24, objetivo_prima_anualizada_mes: 3000 }
+      - { desde_mes: 25, hasta_mes: 36, objetivo_prima_anualizada_mes: 4000 }
+      - { desde_mes: 37, hasta_mes: 48, objetivo_prima_anualizada_mes: 6000 }
+    minimo: 300
+    maximo: 1200
+    base_100pct: 900     # rappel cuando produccion = objetivo (900/2500 = 36%)
+    # formula provisional, CALIBRAR con más meses reales (ver notas):
+    #   rappel = clamp(900 * produccion_mes / objetivo_mes, minimo, maximo)
+    # Contrastado contra datos reales:
+    #   abril, mayo, junio 2026 -> rappel real 1.200 (tope, produccion alta) OK
+    #   febrero 2026 -> rappel real 1.041,20 con produccion declarada 1.565,56
+    #     (formula da ~563, no cuadra — probablemente "producción" para el
+    #     rappel incluye también ramos de ASISA VIDA, ya que el contrato dice
+    #     "vinculado a un objetivo en primas anualizadas EN TODOS LOS RAMOS".
+    #     PENDIENTE: validar sumando producción de ASISA VIDA del mismo mes.)
+    formula_confianza: "media"  # "alta" en los extremos (min/max), "media" en tramos intermedios
+
+  # Rappel variable por mix de producto (Anexo II, punto 2)
+  # Regla confirmada por el agente: hay que cumplir las 4 columnas de la fila
+  # simultáneamente (nuevas altas del mes) para alcanzar ese nivel.
+  variable_mix:
+    niveles:
+      - { nivel: 1, importe: 100, salud: 6,  dental: 6,  accidentes_hospitalizacion: 1, decesos: 2 }
+      - { nivel: 2, importe: 200, salud: 8,  dental: 8,  accidentes_hospitalizacion: 2, decesos: 3 }
+      - { nivel: 3, importe: 300, salud: 10, dental: 10, accidentes_hospitalizacion: 3, decesos: 4 }
+    nota: "Históricamente no alcanzado por el agente (confirmado). Se calcula igualmente por completitud."
+
+  # Rappel trimestral (a partir del año 5, Anexo II punto 3) — no aplica todavía
+  trimestral:
+    niveles:
+      - { nivel: 1, importe: 500,  salud: 15, dental: 15, accidentes_hospitalizacion: 9,  decesos: 9 }
+      - { nivel: 2, importe: 1000, salud: 30, dental: 30, accidentes_hospitalizacion: 9,  decesos: 9 }
+      - { nivel: 3, importe: 2000, salud: 40, dental: 40, accidentes_hospitalizacion: 12, decesos: 12 }
+      - { nivel: 4, importe: 3000, salud: 50, dental: 50, accidentes_hospitalizacion: 15, decesos: 15 }
+
+# -----------------------------------------------------------------------------
+# Reglas de periodo de devengo (regla del agente: ciclo 16 -> 15)
+# -----------------------------------------------------------------------------
+periodo_devengo:
+  dia_inicio_ciclo: 16   # el ciclo de un "mes de rappel/producción" va del 16
+  dia_fin_ciclo: 15      # del mes anterior al 15 del mes en curso
+  nota: >
+    Tanto la fecha de emisión como la fecha de efecto de la póliza deben caer
+    dentro de esta ventana para contar en el periodo correspondiente.
+
+# -----------------------------------------------------------------------------
+# Reconciliación / alertas
+# -----------------------------------------------------------------------------
+alertas:
+  dias_margen_antes_de_alertar: 45   # días desde fecha de efecto sin aparecer
+                                       # en Liquidación antes de marcar "revisar"
