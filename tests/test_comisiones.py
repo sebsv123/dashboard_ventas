@@ -1,5 +1,7 @@
+from datetime import date
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from engine.comisiones import (
@@ -15,6 +17,17 @@ from ingestion.polizas import parsear_polizas
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CONFIG_PATH = Path(__file__).parent.parent / "config" / "contrato.yaml"
+
+
+def _fila(razon_social: str, forma_pago: str, fecha_efecto: date) -> pd.Series:
+    return pd.Series(
+        {
+            "poliza": "TEST",
+            "razon_social": razon_social,
+            "forma_pago": forma_pago,
+            "fecha_efecto": fecha_efecto,
+        }
+    )
 
 
 @pytest.fixture
@@ -61,3 +74,47 @@ def test_estimacion_salud_mensual_confianza_media(contrato, df_polizas):
 
 def test_retencion_irpf(contrato):
     assert aplicar_retencion(1000.0, contrato) == 850.0
+
+
+def test_estimacion_salud_primer_anio_por_antiguedad(contrato):
+    # 6 meses de antigüedad -> sigue en primer año (25% ASISA PARTICULARES)
+    fila = _fila("ASISA PARTICULARES", "A", date(2026, 1, 15))
+    estimacion = estimar_comision_poliza(
+        fila, contrato, prima_anual=1000.0, fecha_referencia=date(2026, 7, 15)
+    )
+    assert estimacion.comision_bruta_estimada == pytest.approx(250.0)
+
+
+def test_estimacion_salud_segundo_anio_por_antiguedad(contrato):
+    # 14 meses de antigüedad -> año 2+ (20% ASISA PARTICULARES, no 25%)
+    fila = _fila("ASISA PARTICULARES", "A", date(2025, 5, 15))
+    estimacion = estimar_comision_poliza(
+        fila, contrato, prima_anual=1000.0, fecha_referencia=date(2026, 7, 15)
+    )
+    assert estimacion.comision_bruta_estimada == pytest.approx(200.0)
+
+
+def test_estimacion_vida_escalado_primer_anio(contrato):
+    # Producto Vida con escalado por año: 6 meses -> primer_anio (20%)
+    fila = _fila("ASISA AV ACCIDENTES COMPROMISO 10", "M", date(2026, 1, 15))
+    estimacion = estimar_comision_poliza(
+        fila,
+        contrato,
+        prima_anual=1200.0,
+        prima_recibo_mensual=100.0,
+        fecha_referencia=date(2026, 7, 15),
+    )
+    assert estimacion.comision_bruta_estimada == pytest.approx(20.0)
+
+
+def test_estimacion_vida_escalado_segundo_anio(contrato):
+    # Producto Vida con escalado por año: 14 meses -> segundo_anio (30%, no 20%)
+    fila = _fila("ASISA AV ACCIDENTES COMPROMISO 10", "M", date(2025, 5, 15))
+    estimacion = estimar_comision_poliza(
+        fila,
+        contrato,
+        prima_anual=1200.0,
+        prima_recibo_mensual=100.0,
+        fecha_referencia=date(2026, 7, 15),
+    )
+    assert estimacion.comision_bruta_estimada == pytest.approx(30.0)

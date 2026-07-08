@@ -61,11 +61,28 @@ def _pct_comision_salud(contrato: ContratoConfig, razon_social: str, es_primer_a
     return bloque.produccion
 
 
-def _pct_comision_vida(contrato: ContratoConfig, razon_social: str) -> float:
+def _meses_transcurridos(fecha_efecto: date, fecha_referencia: date) -> int:
+    """Nº de meses completos transcurridos entre fecha_efecto y fecha_referencia."""
+    meses = (fecha_referencia.year - fecha_efecto.year) * 12 + (
+        fecha_referencia.month - fecha_efecto.month
+    )
+    if fecha_referencia.day < fecha_efecto.day:
+        meses -= 1
+    return max(meses, 0)
+
+
+def _pct_comision_vida(contrato: ContratoConfig, razon_social: str, meses_transcurridos: int) -> float:
     datos = contrato.comisiones_vida.get(razon_social, {})
-    # Algunos productos vida tienen escalado por año (AV Accidentes Compromiso 10);
-    # de momento usamos siempre 'produccion' (primer año) para la estimación.
-    return datos.get("produccion", datos.get("primer_anio", 0.0))
+    if "produccion" in datos:
+        # Producto sin distinción de año en el Anexo I: mismo % siempre.
+        return datos["produccion"]
+    # Productos con escalado por año (p.ej. AV Accidentes Compromiso 10).
+    anio_index = meses_transcurridos // 12
+    if anio_index <= 0:
+        return datos.get("primer_anio", 0.0)
+    if anio_index == 1:
+        return datos.get("segundo_anio", datos.get("tercer_anio_en_adelante", 0.0))
+    return datos.get("tercer_anio_en_adelante", datos.get("segundo_anio", 0.0))
 
 
 def estimar_comision_poliza(
@@ -73,15 +90,23 @@ def estimar_comision_poliza(
     contrato: ContratoConfig,
     prima_anual: float,
     prima_recibo_mensual: float | None = None,
+    fecha_referencia: date | None = None,
 ) -> EstimacionComision:
-    """Estima la comisión de una póliza dado su tipo, sin necesidad de Liquidación."""
+    """Estima la comisión de una póliza dado su tipo, sin necesidad de Liquidación.
+
+    `fecha_referencia` (por defecto hoy) se usa para determinar si la póliza
+    lleva 12 meses o más activa y le toca ya el % de mantenimiento (año 2+)
+    en vez del % de producción (primer año).
+    """
     tipo = clasificar_poliza(fila_poliza, contrato)
     razon_social = fila_poliza["razon_social"]
     fecha_efecto: date | None = fila_poliza["fecha_efecto"]
-    es_primer_anio = True  # TODO: comparar fecha_efecto vs hoy para año 2+
+    ref = fecha_referencia if fecha_referencia is not None else date.today()
+    meses_transcurridos = _meses_transcurridos(fecha_efecto, ref) if fecha_efecto else 0
+    es_primer_anio = meses_transcurridos < 12
 
     if tipo == TIPO_VIDA:
-        pct = _pct_comision_vida(contrato, razon_social)
+        pct = _pct_comision_vida(contrato, razon_social, meses_transcurridos)
         base = prima_recibo_mensual if prima_recibo_mensual is not None else prima_anual / 12
         return EstimacionComision(
             poliza=fila_poliza["poliza"],
@@ -100,7 +125,11 @@ def estimar_comision_poliza(
             mes_devengo=f"{fecha_efecto.year:04d}-{fecha_efecto.month:02d}" if fecha_efecto else "",
             comision_bruta_estimada=round(prima_anual * pct, 2),
             confianza="alta",
-            nota="Salud prepago anual: comisión íntegra en el mes de efecto.",
+            nota=(
+                "Salud prepago anual: comisión íntegra en el mes de efecto."
+                if es_primer_anio
+                else "Salud prepago anual: póliza en año 2+, % de mantenimiento."
+            ),
         )
 
     # TIPO_SALUD_MENSUAL
