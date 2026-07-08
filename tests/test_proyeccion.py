@@ -76,3 +76,14 @@ def test_proyeccion_dia_actual_invalido_lanza_error(contrato):
             contrato=contrato,
             fecha_referencia=date(2026, 4, 15),
         )
+
+
+def test_proyeccion_dia_actual_mayor_que_dias_totales_lanza_error(contrato):
+    with pytest.raises(ValueError):
+        proyectar_cierre_mes(
+            produccion_acumulada_hasta_hoy=100.0,
+            dia_actual_del_mes=31,
+            dias_totales_del_mes=28,
+            contrato=contrato,
+            fecha_referencia=date(2026, 4, 15),
+        )

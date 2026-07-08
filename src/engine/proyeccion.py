@@ -41,6 +41,8 @@ def proyectar_cierre_mes(
     """
     if dia_actual_del_mes <= 0:
         raise ValueError("dia_actual_del_mes debe ser >= 1")
+    if dia_actual_del_mes > dias_totales_del_mes:
+        raise ValueError("dia_actual_del_mes no puede ser mayor que dias_totales_del_mes")
 
     ritmo_diario = produccion_acumulada_hasta_hoy / dia_actual_del_mes
     produccion_proyectada = round(ritmo_diario * dias_totales_del_mes, 2)
