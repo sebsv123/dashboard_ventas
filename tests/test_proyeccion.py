@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from engine.config_contrato import cargar_contrato
-from engine.proyeccion import proyectar_cierre_mes
+from engine.proyeccion import DIAS_MINIMOS_PARA_PROYECCION_FIABLE, proyectar_cierre_mes
 
 CONFIG_PATH = Path(__file__).parent.parent / "config" / "contrato.yaml"
 
@@ -87,3 +87,40 @@ def test_proyeccion_dia_actual_mayor_que_dias_totales_lanza_error(contrato):
             contrato=contrato,
             fecha_referencia=date(2026, 4, 15),
         )
+
+
+def test_proyeccion_con_pocos_dias_avisa_de_poca_fiabilidad(contrato):
+    # 5 días transcurridos -> aviso de "poco fiable", sin cambiar el cálculo.
+    proyeccion = proyectar_cierre_mes(
+        produccion_acumulada_hasta_hoy=500.0,
+        dia_actual_del_mes=5,
+        dias_totales_del_mes=30,
+        contrato=contrato,
+        fecha_referencia=date(2026, 4, 5),
+    )
+    assert proyeccion.produccion_proyectada == pytest.approx(3000.0)  # 500/5*30, sin cambios
+    assert "poco fiable" in proyeccion.mensaje.lower()
+
+
+def test_proyeccion_con_dias_suficientes_no_avisa(contrato):
+    # Justo en el umbral (DIAS_MINIMOS_PARA_PROYECCION_FIABLE días) ya no
+    # debe aparecer el aviso.
+    proyeccion = proyectar_cierre_mes(
+        produccion_acumulada_hasta_hoy=800.0,
+        dia_actual_del_mes=DIAS_MINIMOS_PARA_PROYECCION_FIABLE,
+        dias_totales_del_mes=30,
+        contrato=contrato,
+        fecha_referencia=date(2026, 4, 8),
+    )
+    assert "poco fiable" not in proyeccion.mensaje.lower()
+
+
+def test_proyeccion_un_dia_menos_del_umbral_si_avisa(contrato):
+    proyeccion = proyectar_cierre_mes(
+        produccion_acumulada_hasta_hoy=800.0,
+        dia_actual_del_mes=DIAS_MINIMOS_PARA_PROYECCION_FIABLE - 1,
+        dias_totales_del_mes=30,
+        contrato=contrato,
+        fecha_referencia=date(2026, 4, 7),
+    )
+    assert "poco fiable" in proyeccion.mensaje.lower()

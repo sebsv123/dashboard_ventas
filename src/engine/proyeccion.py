@@ -15,6 +15,13 @@ from datetime import date
 from engine.config_contrato import ContratoConfig
 from engine.rappel import ResultadoRappelInicial, calcular_rappel_inicial
 
+# Con menos días que esto, el ritmo diario medio está calculado sobre muy
+# poca muestra — las ventas de seguros no se reparten uniformemente en el
+# mes (hay rachas), así que extrapolar esos primeros días al mes completo
+# es especialmente poco fiable. No cambia la fórmula ni el número, solo
+# añade un aviso extra en el mensaje.
+DIAS_MINIMOS_PARA_PROYECCION_FIABLE = 8
+
 
 @dataclass
 class ProyeccionCierreMes:
@@ -74,6 +81,14 @@ def proyectar_cierre_mes(
             f"producción ({pct:.0f}% del objetivo del tramo), lo que te daría un "
             f"rappel estimado de ~{rappel_proyectado.importe:,.0f}€. Todavía puedes "
             f"acelerar el ritmo para mejorar esa cifra."
+        )
+
+    if dia_actual_del_mes < DIAS_MINIMOS_PARA_PROYECCION_FIABLE:
+        mensaje = (
+            "⚠️ Proyección poco fiable todavía: se basa en muy pocos días de "
+            "datos, y las ventas de seguros no se reparten uniformemente en "
+            "el mes — dale un par de semanas más antes de tomarte esta cifra "
+            f"en serio. {mensaje}"
         )
 
     return ProyeccionCierreMes(
