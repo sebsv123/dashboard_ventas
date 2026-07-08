@@ -95,7 +95,11 @@ CREATE TABLE IF NOT EXISTS alertas_reconciliacion (
 
 def conectar(db_path: str | Path) -> sqlite3.Connection:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    # check_same_thread=False: Streamlit ejecuta la subida de ficheros y los
+    # reruns en hilos distintos al que crea la conexión cacheada; sqlite3 lo
+    # bloquea por defecto aunque en nuestro caso (una sola persona, escrituras
+    # secuenciales) es seguro desactivarlo.
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
