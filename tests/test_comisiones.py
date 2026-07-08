@@ -107,6 +107,17 @@ def test_estimacion_vida_escalado_primer_anio(contrato):
     assert estimacion.comision_bruta_estimada == pytest.approx(20.0)
 
 
+def test_estimacion_vida_flat_pasa_a_mantenimiento_segundo_anio(contrato):
+    # ASISA VIDA TRANQUILIDAD: Producción 60% / Mantenimiento 20% —
+    # con 14 meses de antigüedad debe caer a mantenimiento, no seguir en 60%.
+    fila = _fila("ASISA VIDA TRANQUILIDAD", "M", date(2025, 5, 15))
+    estimacion = estimar_comision_poliza(
+        fila, contrato, prima_anual=144.0, prima_recibo_mensual=12.0,
+        fecha_referencia=date(2026, 7, 15),
+    )
+    assert estimacion.comision_bruta_estimada == pytest.approx(2.4)  # 12 * 0.20
+
+
 def test_estimacion_vida_escalado_segundo_anio(contrato):
     # Producto Vida con escalado por año: 14 meses -> segundo_anio (30%, no 20%)
     fila = _fila("ASISA AV ACCIDENTES COMPROMISO 10", "M", date(2025, 5, 15))

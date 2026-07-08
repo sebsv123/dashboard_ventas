@@ -74,8 +74,11 @@ def _meses_transcurridos(fecha_efecto: date, fecha_referencia: date) -> int:
 def _pct_comision_vida(contrato: ContratoConfig, razon_social: str, meses_transcurridos: int) -> float:
     datos = contrato.comisiones_vida.get(razon_social, {})
     if "produccion" in datos:
-        # Producto sin distinción de año en el Anexo I: mismo % siempre.
-        return datos["produccion"]
+        # Igual que Salud: a partir del segundo año (12 meses) aplica
+        # el % de Mantenimiento, no el de Producción.
+        if meses_transcurridos < 12:
+            return datos["produccion"]
+        return datos.get("mantenimiento", datos["produccion"])
     # Productos con escalado por año (p.ej. AV Accidentes Compromiso 10).
     anio_index = meses_transcurridos // 12
     if anio_index <= 0:
