@@ -6,6 +6,7 @@ Arranque: uv run streamlit run src/dashboard/app.py
 from __future__ import annotations
 
 import calendar
+import os
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -44,7 +45,9 @@ from ingestion.factura_pdf import parsear_factura_pdf
 from ingestion.liquidacion import parsear_liquidacion
 from ingestion.polizas import parsear_polizas
 
-DB_PATH = RAIZ / "data" / "asisa.db"
+# DASHBOARD_DB_PATH permite apuntar a otra BD (tests de humo con AppTest);
+# sin la variable de entorno, el comportamiento es idéntico al de siempre.
+DB_PATH = Path(os.environ.get("DASHBOARD_DB_PATH", str(RAIZ / "data" / "asisa.db")))
 CONFIG_PATH = RAIZ / "config" / "contrato.yaml"
 LOGO_PATH = RAIZ / "assets" / "asisa_logo.png"
 
@@ -224,8 +227,10 @@ with tab_polizas:
             "Provincia", options=sorted(df_polizas["provincia_tomador"].dropna().unique())
         )
     with col_f3:
+        opciones_situacion = sorted(df_polizas["situacion"].dropna().unique())
+        default_situacion = ["A"] if "A" in opciones_situacion else []
         filtro_situacion = st.multiselect(
-            "Situación", options=sorted(df_polizas["situacion"].dropna().unique()), default=["A"]
+            "Situación", options=opciones_situacion, default=default_situacion
         )
 
     df_mostrar = df_polizas.copy()
