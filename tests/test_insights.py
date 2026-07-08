@@ -11,6 +11,7 @@ from engine.insights import (
     construir_produccion_polizas,
     evolucion_mensual,
     hay_suficiente_historico,
+    primeras_altas_por_periodo,
     ranking_productos,
     ranking_provincias,
     variacion_mes_actual_vs_anterior,
@@ -144,3 +145,76 @@ def test_alertas_cambio_tarifa_respeta_el_umbral_del_yaml(df_polizas, tmp_path):
     # por defecto, pero no con uno de 10.
     alertas = alertas_cambio_tarifa(df_polizas, contrato_umbral_bajo, date(2027, 4, 15))
     assert alertas == []
+
+
+# =============================================================================
+# Caso real confirmado: pólizas 64201679 y 64174100, fecha_efecto=30/06/2026,
+# pero su recibo de Facturación (el que fija el periodo real de devengo)
+# tiene periodo_liquidacion="2026-07" porque su ventana de ciclo 16-jun a
+# 15-jul cae en julio. ANTES del fix, el dashboard las contaba en junio
+# (mes calendario de fecha_efecto); AHORA deben contar en julio.
+# =============================================================================
+
+
+@pytest.fixture
+def df_polizas_fin_de_mes():
+    return parsear_polizas(FIXTURES / "polizas_fin_de_mes.csv")
+
+
+@pytest.fixture
+def df_facturacion_fin_de_mes():
+    return parsear_facturacion(FIXTURES / "facturacion_fin_de_mes.csv")
+
+
+def test_primeras_altas_por_periodo_usa_periodo_liquidacion_no_fecha_efecto(
+    df_facturacion_fin_de_mes,
+):
+    primeras = primeras_altas_por_periodo(df_facturacion_fin_de_mes)
+    periodos = set(primeras["periodo_liquidacion"])
+    assert periodos == {"2026-07"}
+    assert "2026-06" not in periodos
+
+
+def test_construir_produccion_polizas_asigna_julio_no_junio_al_caso_real(
+    df_polizas_fin_de_mes, df_facturacion_fin_de_mes, contrato
+):
+    # fecha_efecto de ambas pólizas es 30/06/2026 (junio) pero su periodo
+    # real de devengo, según Facturación, es 2026-07. Si el bug reapareciera
+    # (volver a usar el mes calendario de fecha_efecto), esta aserción
+    # fallaría con periodo == {"2026-06"}.
+    df_produccion = construir_produccion_polizas(
+        df_polizas_fin_de_mes, df_facturacion_fin_de_mes, contrato
+    )
+    assert set(df_produccion["poliza"]) == {"64201679", "64174100"}
+    assert set(df_produccion["periodo"]) == {"2026-07"}
+
+    evolucion = evolucion_mensual(df_produccion)
+    fila_julio = evolucion[evolucion["periodo"] == "2026-07"].iloc[0]
+    assert fila_julio["polizas_nuevas"] == 2
+    assert fila_julio["prima_anual_total"] == pytest.approx((40.0 + 35.0) * 12)
+    assert "2026-06" not in set(evolucion["periodo"])
+
+
+def test_rappel_tab_cuenta_altas_de_julio_no_junio(
+    df_polizas_fin_de_mes, df_facturacion_fin_de_mes, contrato
+):
+    # Reproduce exactamente la consulta de la pestaña Rappel de app.py:
+    # filtra primeras_altas_por_periodo por el periodo objetivo y cruza con
+    # Pólizas — nunca al revés.
+    altas_julio = primeras_altas_por_periodo(df_facturacion_fin_de_mes)
+    altas_julio = altas_julio[altas_julio["periodo_liquidacion"] == "2026-07"]
+    altas_julio = altas_julio.merge(
+        df_polizas_fin_de_mes[["poliza", "forma_pago", "razon_social"]],
+        on="poliza",
+        how="inner",
+    )
+    assert len(altas_julio) == 2  # las 2 pólizas SÍ cuentan como alta de julio
+
+    altas_junio = primeras_altas_por_periodo(df_facturacion_fin_de_mes)
+    altas_junio = altas_junio[altas_junio["periodo_liquidacion"] == "2026-06"]
+    assert altas_junio.empty  # y NO cuentan como alta de junio
+
+    produccion_salud_julio = sum(
+        fila["prima_neta"] * 12 for _, fila in altas_julio.iterrows()  # ambas son forma_pago M
+    )
+    assert produccion_salud_julio == pytest.approx((40.0 + 35.0) * 12)

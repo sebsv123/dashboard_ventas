@@ -8,7 +8,7 @@ from __future__ import annotations
 import calendar
 import os
 import sys
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -33,6 +33,7 @@ from engine.insights import (
     construir_produccion_polizas,
     evolucion_mensual,
     hay_suficiente_historico,
+    primeras_altas_por_periodo,
     ranking_productos,
     ranking_provincias,
     variacion_mes_actual_vs_anterior,
@@ -113,7 +114,7 @@ with st.sidebar:
     f_liquidacion = st.file_uploader("Liquidación (CSV)", type="csv", key="liquidacion")
     f_factura_pdf = st.file_uploader("Factura (PDF)", type="pdf", key="factura_pdf")
 
-    if st.button("Procesar ficheros subidos", type="primary", use_container_width=True):
+    if st.button("Procesar ficheros subidos", type="primary", width="stretch"):
         mensajes = []
         try:
             if f_facturacion:
@@ -170,6 +171,19 @@ if df_polizas.empty and df_facturacion.empty:
     st.stop()
 
 # --- Tabs -----------------------------------------------------------------
+# NOTA sobre "periodo" en este dashboard — no es la misma noción en todas
+# las pestañas, y mezclarlas fue la causa de un bug real (pólizas con
+# fecha_efecto a fin de mes contadas en el mes calendario equivocado):
+#   - Resumen: SIN filtro de periodo. Son snapshots de cartera completa
+#     (pólizas activas ahora mismo, histórico completo de facturas PDF).
+#   - Rappel: usa periodo_liquidacion de Facturación (columna PER.
+#     LIQUIDACION, el ciclo real 16->15 que calcula ASISA) para decidir
+#     qué pólizas son "nuevas altas del mes en curso" — nunca el mes
+#     calendario de fecha_efecto de Pólizas (ver
+#     engine.insights.primeras_altas_por_periodo).
+#   - Insights: todo el histórico (como Resumen), pero al agrupar "por mes"
+#     también usa periodo_liquidacion vía construir_produccion_polizas,
+#     por la misma razón que Rappel.
 tab_resumen, tab_polizas, tab_rappel, tab_alertas, tab_insights = st.tabs(
     ["📊 Resumen", "📋 Pólizas", "🎯 Rappel", "⚠️ Alertas", "📈 Insights"]
 )
@@ -178,8 +192,7 @@ tab_resumen, tab_polizas, tab_rappel, tab_alertas, tab_insights = st.tabs(
 # TAB: Resumen
 # =============================================================================
 with tab_resumen:
-    mes_actual = datetime.now().strftime("%Y-%m")
-    st.subheader(f"Mes en curso: {mes_actual}")
+    st.subheader("Resumen general (cartera completa, sin filtro de periodo)")
 
     polizas_activas = df_polizas[df_polizas["situacion"] == "A"]
     c1, c2, c3, c4 = st.columns(4)
@@ -196,21 +209,21 @@ with tab_resumen:
         conteo_provincia = df_polizas["provincia_tomador"].value_counts().reset_index()
         conteo_provincia.columns = ["provincia", "polizas"]
         fig = px.bar(conteo_provincia, x="provincia", y="polizas", color_discrete_sequence=[AZUL_ASISA])
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     st.subheader("Producción por producto")
     if not df_polizas.empty:
         conteo_producto = df_polizas["razon_social"].value_counts().reset_index()
         conteo_producto.columns = ["producto", "polizas"]
         fig2 = px.pie(conteo_producto, names="producto", values="polizas")
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width="stretch")
 
     if not df_factura_pdf.empty:
         st.subheader("Histórico de facturación confirmada")
         hist = df_factura_pdf.sort_values("periodo")[
             ["periodo", "entidad_nombre", "rappel", "total_liquidacion", "total_factura"]
         ]
-        st.dataframe(hist, use_container_width=True, hide_index=True)
+        st.dataframe(hist, width="stretch", hide_index=True)
 
 # =============================================================================
 # TAB: Pólizas
@@ -248,7 +261,7 @@ with tab_polizas:
                 "fecha_efecto", "provincia_tomador", "nombre_tomador",
             ]
         ],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -261,24 +274,26 @@ with tab_rappel:
     hoy = date.today()
     mes_texto = f"{hoy.year:04d}-{hoy.month:02d}"
 
-    # Producción del mes en curso = prima anual de pólizas nuevas (fecha_efecto en el mes)
-    nuevas_mes_salud = df_polizas[
-        (df_polizas["fecha_efecto"].dt.strftime("%Y-%m") == mes_texto)
-        & (~df_polizas["razon_social"].isin(contrato.comisiones_vida.keys()))
-    ]
-    nuevas_mes_vida = df_polizas[
-        (df_polizas["fecha_efecto"].dt.strftime("%Y-%m") == mes_texto)
-        & (df_polizas["razon_social"].isin(contrato.comisiones_vida.keys()))
-    ]
+    # PERIODO: se determina por periodo_liquidacion de Facturación (el ciclo
+    # real 16->15 que ya calcula ASISA), NUNCA por el mes calendario de
+    # fecha_efecto de Pólizas — Pólizas es una foto de cartera sin noción de
+    # periodo. Ver el docstring de primeras_altas_por_periodo para el caso
+    # real que motivó esto (pólizas con efecto 30/06 que devengan en julio).
+    altas_mes = primeras_altas_por_periodo(df_facturacion)
+    altas_mes = altas_mes[altas_mes["periodo_liquidacion"] == mes_texto]
+    altas_mes = altas_mes.merge(
+        df_polizas[["poliza", "forma_pago", "razon_social"]], on="poliza", how="inner"
+    )
 
-    # Aproximación de prima anualizada: usamos la prima_neta de Facturación
-    # del recibo más reciente de cada póliza nueva, anualizada si es mensual.
+    nuevas_mes_salud = altas_mes[~altas_mes["razon_social"].isin(contrato.comisiones_vida.keys())]
+    nuevas_mes_vida = altas_mes[altas_mes["razon_social"].isin(contrato.comisiones_vida.keys())]
+
+    # La prima del primer recibo (el mismo que fija el periodo) se anualiza
+    # si la póliza es mensual — ya no hace falta un lookup aparte a
+    # Facturación "por el recibo más reciente".
     produccion_salud = 0.0
     for _, p in nuevas_mes_salud.iterrows():
-        recibo = df_facturacion[df_facturacion["poliza"] == p["poliza"]]
-        if recibo.empty:
-            continue
-        prima = recibo.iloc[-1]["prima_neta"]
+        prima = p["prima_neta"]
         produccion_salud += prima if p["forma_pago"] == "A" else prima * 12
 
     resultado_rappel = calcular_rappel_inicial(
@@ -340,7 +355,7 @@ with tab_rappel:
             y=rappel_minimo, line_dash="dot",
             annotation_text=f"Mínimo ({rappel_minimo:,.0f}€)",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 # =============================================================================
 # TAB: Alertas
@@ -402,14 +417,14 @@ with tab_insights:
                 color_discrete_map={"salud": AZUL_ASISA, "vida": "#F2A900"},
                 title="Nº de pólizas nuevas por mes",
             )
-            st.plotly_chart(fig_polizas, use_container_width=True)
+            st.plotly_chart(fig_polizas, width="stretch")
 
             fig_prima = px.line(
                 evolucion, x="periodo", y="prima_anual_total", color="tipo", markers=True,
                 color_discrete_map={"salud": AZUL_ASISA, "vida": "#F2A900"},
                 title="Prima anualizada total por mes",
             )
-            st.plotly_chart(fig_prima, use_container_width=True)
+            st.plotly_chart(fig_prima, width="stretch")
 
             st.markdown("### Mes a mes")
             variacion = variacion_mes_actual_vs_anterior(df_produccion, date.today())
@@ -436,7 +451,7 @@ with tab_insights:
                 color_discrete_sequence=[AZUL_ASISA],
             )
             fig_prod.update_layout(yaxis={"categoryorder": "total ascending"})
-            st.plotly_chart(fig_prod, use_container_width=True)
+            st.plotly_chart(fig_prod, width="stretch")
 
         with col_rank2:
             st.markdown("### Ranking de provincias")
@@ -446,7 +461,7 @@ with tab_insights:
                 color_discrete_sequence=[AZUL_ASISA],
             )
             fig_prov.update_layout(yaxis={"categoryorder": "total ascending"})
-            st.plotly_chart(fig_prov, use_container_width=True)
+            st.plotly_chart(fig_prov, width="stretch")
 
     st.divider()
     st.markdown("### Próximos cambios de tarifa")

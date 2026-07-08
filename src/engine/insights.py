@@ -25,39 +25,71 @@ COLUMNAS_PRODUCCION = [
 ]
 
 
+def primeras_altas_por_periodo(df_facturacion: pd.DataFrame) -> pd.DataFrame:
+    """El primer recibo de Facturación de cada póliza.
+
+    FUENTE DE VERDAD DE "PERIODO" EN TODO EL PROYECTO: el periodo real de
+    devengo de una póliza es el ciclo 16→15 que ASISA ya calcula y expone
+    en la columna "PER. LIQUIDACION" de Facturación/Liquidación
+    (`periodo_liquidacion`) — NUNCA el mes calendario de la fecha de
+    efecto de Pólizas. Pólizas es una foto completa de cartera en el
+    momento de cada exportación (no tiene noción de periodo); Facturación
+    sí. Confirmado con datos reales: dos pólizas con fecha_efecto
+    30/06/2026 aparecen en Facturación de JULIO con
+    periodo_liquidacion="2026-07", porque su ventana de devengo real
+    (16-junio a 15-julio) cae en julio, no en junio.
+
+    Cualquier cálculo de "qué pólizas son nuevas altas de un periodo X"
+    debe partir de aquí — filtrar Facturación por periodo_liquidacion y
+    LUEGO cruzar con Pólizas por número de póliza para obtener
+    forma_pago/razon_social/fecha_efecto — nunca al revés (nunca filtrar
+    primero Pólizas por el mes calendario de fecha_efecto).
+
+    Solo se cuenta el PRIMER recibo de cada póliza: las de salud mensual
+    reaparecen en Facturación cada mes con un recibo nuevo, pero solo el
+    primero es la "nueva alta" — los siguientes son la misma póliza
+    siendo facturada de nuevo, no producción nueva.
+    """
+    columnas = ["poliza", "periodo_liquidacion", "prima_neta"]
+    if df_facturacion.empty:
+        return pd.DataFrame(columns=columnas)
+    ordenado = df_facturacion.sort_values(["poliza", "periodo_liquidacion", "fecha_desde"])
+    primeras = ordenado.groupby("poliza", as_index=False).first()
+    return primeras[columnas]
+
+
 def construir_produccion_polizas(
     df_polizas: pd.DataFrame, df_facturacion: pd.DataFrame, contrato: ContratoConfig
 ) -> pd.DataFrame:
-    """Une pólizas con su recibo más reciente y anualiza la prima.
+    """Una fila por póliza con su periodo real de alta, tipo y prima anualizada.
 
-    Devuelve una fila por póliza con periodo ("AAAA-MM" de fecha_efecto),
-    tipo ('vida'|'salud') y prima_anual estimada — la misma aproximación
-    que ya usa la pestaña Rappel (prima del recibo más reciente, anualizada
-    si la póliza es mensual).
+    El periodo ("AAAA-MM") viene de `primeras_altas_por_periodo` — el ciclo
+    real de devengo de ASISA vía Facturación, no el mes calendario de
+    fecha_efecto (ver el docstring de esa función). Una póliza sin ningún
+    recibo en Facturación todavía no puede tener periodo real asignado, así
+    que no aparece aquí hasta que se suba su primer recibo.
     """
-    if df_polizas.empty:
+    if df_polizas.empty or df_facturacion.empty:
         return pd.DataFrame(columns=COLUMNAS_PRODUCCION)
 
-    df = df_polizas.dropna(subset=["fecha_efecto"]).copy()
-    if df.empty:
+    primeras_altas = primeras_altas_por_periodo(df_facturacion)
+    fusion = primeras_altas.merge(
+        df_polizas[["poliza", "razon_social", "provincia_tomador", "forma_pago", "fecha_efecto"]],
+        on="poliza",
+        how="inner",
+    )
+    if fusion.empty:
         return pd.DataFrame(columns=COLUMNAS_PRODUCCION)
 
-    df["periodo"] = pd.to_datetime(df["fecha_efecto"]).dt.strftime("%Y-%m")
-    df["tipo"] = df["razon_social"].apply(
+    fusion = fusion.rename(columns={"periodo_liquidacion": "periodo"})
+    fusion["tipo"] = fusion["razon_social"].apply(
         lambda r: "vida" if r in contrato.comisiones_vida else "salud"
     )
-
-    primas = []
-    for _, fila in df.iterrows():
-        recibos = df_facturacion[df_facturacion["poliza"] == fila["poliza"]]
-        if recibos.empty:
-            primas.append(0.0)
-            continue
-        prima = recibos.iloc[-1]["prima_neta"]
-        primas.append(prima if fila["forma_pago"] == "A" else prima * 12)
-    df["prima_anual"] = primas
-
-    return df[COLUMNAS_PRODUCCION]
+    fusion["prima_anual"] = fusion.apply(
+        lambda fila: fila["prima_neta"] if fila["forma_pago"] == "A" else fila["prima_neta"] * 12,
+        axis=1,
+    )
+    return fusion[COLUMNAS_PRODUCCION]
 
 
 def hay_suficiente_historico(df_produccion: pd.DataFrame) -> bool:
