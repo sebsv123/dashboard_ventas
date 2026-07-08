@@ -157,7 +157,11 @@ def estimar_comision_poliza(
     # parse_dates), un valor nulo llega como pd.NaT, no como None — y
     # bool(pd.NaT) es True, así que un simple "if fecha_efecto" no basta
     # para detectar la ausencia de fecha (se creía comprobado, no lo estaba).
-    tiene_fecha_efecto = fecha_efecto is not None and not pd.isna(fecha_efecto)
+    # Se exige además que sea una `date` de verdad (isinstance cubre también
+    # pd.Timestamp, que hereda de date): un "" o un NaN suelto de pd.isna()
+    # sin este chequeo se colarían como "fecha válida" y reventarían igual
+    # más abajo al intentar leer .year/.month.
+    tiene_fecha_efecto = isinstance(fecha_efecto, date) and not pd.isna(fecha_efecto)
     ref = fecha_referencia if fecha_referencia is not None else date.today()
     meses_desde_efecto = meses_transcurridos(fecha_efecto, ref) if tiene_fecha_efecto else 0
     es_primer_anio = meses_desde_efecto < 12

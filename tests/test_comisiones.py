@@ -162,6 +162,18 @@ def test_estimacion_con_fecha_efecto_nat_no_rompe(contrato):
     assert estimacion.comision_bruta_estimada == pytest.approx(250.0)  # primer año, 25%
 
 
+def test_estimacion_con_fecha_efecto_string_vacio_no_rompe(contrato):
+    # Caso distinto de pd.NaT pero con el mismo riesgo: si fecha_efecto
+    # llegara como "" (p.ej. un origen de datos que no pase por
+    # parsear_fecha_es), pd.isna("") es False, así que un guard basado solo
+    # en pd.isna() lo trataría como fecha válida y reventaría igual al leer
+    # .year en un string. Debe tratarse también como fecha desconocida.
+    fila = _fila("ASISA PARTICULARES", "A", "")
+    estimacion = estimar_comision_poliza(fila, contrato, prima_anual=1000.0)
+    assert estimacion.mes_devengo == ""
+    assert estimacion.comision_bruta_estimada == pytest.approx(250.0)  # primer año, 25%
+
+
 def test_fecha_cambio_a_mantenimiento_coincide_con_meses_transcurridos_caso_normal():
     fecha_efecto = date(2026, 6, 15)
     cambio = fecha_cambio_a_mantenimiento(fecha_efecto)
