@@ -14,6 +14,8 @@ from engine.insights import (
     primeras_altas_por_periodo,
     ranking_productos,
     ranking_provincias,
+    resumen_produccion_periodo,
+    siguiente_periodo,
     variacion_mes_actual_vs_anterior,
 )
 from ingestion.facturacion import parsear_facturacion
@@ -218,3 +220,45 @@ def test_rappel_tab_cuenta_altas_de_julio_no_junio(
         fila["prima_neta"] * 12 for _, fila in altas_julio.iterrows()  # ambas son forma_pago M
     )
     assert produccion_salud_julio == pytest.approx((40.0 + 35.0) * 12)
+
+
+# =============================================================================
+# Vista rápida (mes actual/siguiente): resumen_produccion_periodo()
+# =============================================================================
+
+
+def test_siguiente_periodo_caso_normal():
+    assert siguiente_periodo("2026-07") == "2026-08"
+
+
+def test_siguiente_periodo_cruza_de_anio():
+    assert siguiente_periodo("2026-12") == "2027-01"
+
+
+def test_resumen_produccion_periodo_sin_ningun_dato_no_es_cero_sino_sin_datos(
+    df_polizas, df_facturacion, contrato
+):
+    # "2026-07" no tiene ningún recibo en la fixture (todo es "2026-06") ->
+    # debe distinguirse de "hay datos y la producción es 0€".
+    resumen = resumen_produccion_periodo(df_polizas, df_facturacion, contrato, "2026-07")
+    assert resumen.tiene_datos is False
+    assert resumen.produccion_salud == 0.0
+    assert resumen.polizas_detectadas == 0
+
+
+def test_resumen_produccion_periodo_con_polizas_detectadas_suma_bien(
+    df_polizas, df_facturacion, contrato
+):
+    # "2026-06" sí tiene datos: 70000001 (salud mensual, 30€ x12=360) y
+    # 70000003 (salud anual, 500€, sin anualizar) -> 860€. 70000002 es Vida,
+    # no debe sumar a produccion_salud.
+    resumen = resumen_produccion_periodo(df_polizas, df_facturacion, contrato, "2026-06")
+    assert resumen.tiene_datos is True
+    assert resumen.produccion_salud == pytest.approx(360.0 + 500.0)
+    assert resumen.polizas_detectadas == 3  # las 3 pólizas de la fixture, salud+vida
+
+
+def test_resumen_produccion_periodo_sin_polizas_cargadas_no_revienta(df_facturacion, contrato):
+    resumen = resumen_produccion_periodo(pd.DataFrame(), df_facturacion, contrato, "2026-06")
+    assert resumen.tiene_datos is True  # sí hay recibos de Facturación
+    assert resumen.produccion_salud == 0.0  # pero no se puede clasificar sin Pólizas

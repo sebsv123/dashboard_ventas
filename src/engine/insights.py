@@ -92,6 +92,52 @@ def construir_produccion_polizas(
     return fusion[COLUMNAS_PRODUCCION]
 
 
+def siguiente_periodo(periodo: str) -> str:
+    """"2026-07" -> "2026-08"; "2026-12" -> "2027-01"."""
+    anio, mes = (int(x) for x in periodo.split("-"))
+    if mes == 12:
+        return f"{anio + 1:04d}-01"
+    return f"{anio:04d}-{mes + 1:02d}"
+
+
+@dataclass
+class ResumenPeriodoRapido:
+    periodo: str
+    tiene_datos: bool  # False si no hay NINGÚN recibo de Facturación de este periodo
+    produccion_salud: float
+    polizas_detectadas: int
+
+
+def resumen_produccion_periodo(
+    df_polizas: pd.DataFrame, df_facturacion: pd.DataFrame, contrato: ContratoConfig, periodo: str
+) -> ResumenPeriodoRapido:
+    """Producción de Salud (nuevas altas) ya detectada para un periodo real.
+
+    `tiene_datos=False` distingue "no hay ningún dato todavía de este
+    periodo" (no se ha subido Facturación con ese periodo_liquidacion) de
+    "hay datos y la producción es 0" (que sería un hecho real, no ausencia
+    de datos) — para no repetir la confusión de mostrar un 0€ desnudo
+    donde en realidad falta subir el fichero.
+    """
+    altas = primeras_altas_por_periodo(df_facturacion)
+    altas = altas[altas["periodo_liquidacion"] == periodo]
+    if altas.empty:
+        return ResumenPeriodoRapido(periodo, False, 0.0, 0)
+
+    if df_polizas.empty:
+        return ResumenPeriodoRapido(periodo, True, 0.0, 0)
+
+    fusion = altas.merge(
+        df_polizas[["poliza", "forma_pago", "razon_social"]], on="poliza", how="inner"
+    )
+    altas_salud = fusion[~fusion["razon_social"].isin(contrato.comisiones_vida.keys())]
+    produccion_salud = 0.0
+    for _, fila in altas_salud.iterrows():
+        produccion_salud += fila["prima_neta"] if fila["forma_pago"] == "A" else fila["prima_neta"] * 12
+
+    return ResumenPeriodoRapido(periodo, True, round(produccion_salud, 2), len(fusion))
+
+
 def hay_suficiente_historico(df_produccion: pd.DataFrame) -> bool:
     return df_produccion["periodo"].nunique() >= MESES_MINIMOS_PARA_TENDENCIA
 

@@ -37,6 +37,8 @@ from engine.insights import (
     primeras_altas_por_periodo,
     ranking_productos,
     ranking_provincias,
+    resumen_produccion_periodo,
+    siguiente_periodo,
     variacion_mes_actual_vs_anterior,
 )
 from engine.proyeccion import proyectar_cierre_mes
@@ -243,6 +245,57 @@ if df_polizas.empty and df_facturacion.empty:
         "Facturación y Pólizas desde el panel lateral para empezar."
     )
     st.stop()
+
+# --- Vista rápida: mes actual y siguiente --------------------------------------
+# Visible ANTES de las pestañas, a propósito: es lo primero que se ve al
+# abrir el dashboard, sin tener que navegar a buscarlo.
+st.markdown("## 📅 Vista rápida — mes actual y siguiente")
+st.caption(
+    "Solo refleja lo que YA está subido a la base de datos — no es un "
+    "recordatorio de ventas mencionadas de palabra. Si acabas de cerrar "
+    "una póliza y no la ves aquí, sube el CSV de Facturación/Pólizas "
+    "actualizado y vuelve a mirar."
+)
+
+_hoy_vista_rapida = date.today()
+_periodo_actual = f"{_hoy_vista_rapida.year:04d}-{_hoy_vista_rapida.month:02d}"
+_periodo_siguiente = siguiente_periodo(_periodo_actual)
+
+col_periodo_actual, col_periodo_siguiente = st.columns(2)
+for _col, _periodo, _etiqueta in (
+    (col_periodo_actual, _periodo_actual, "Mes actual"),
+    (col_periodo_siguiente, _periodo_siguiente, "Mes siguiente"),
+):
+    with _col:
+        st.markdown(f"**{_etiqueta} · {_periodo}**")
+        _resumen = resumen_produccion_periodo(df_polizas, df_facturacion, contrato, _periodo)
+        if not _resumen.tiene_datos:
+            st.info(
+                f"Todavía no hay datos de {_periodo} — aparecerán en cuanto "
+                "subas Facturación/Pólizas con ventas de ese periodo."
+            )
+        elif _resumen.polizas_detectadas == 0:
+            st.warning(
+                f"Hay recibos de {_periodo} en Facturación, pero no se pudieron "
+                "cruzar con ninguna póliza todavía — sube el CSV de Pólizas "
+                "actualizado para completar este cálculo."
+            )
+        else:
+            _anio_p, _mes_p = (int(x) for x in _periodo.split("-"))
+            _fecha_ref_periodo = date(_anio_p, _mes_p, 1)
+            _rappel_periodo = calcular_rappel_inicial(
+                contrato, fecha_referencia=_fecha_ref_periodo,
+                produccion_mes_salud=_resumen.produccion_salud,
+            )
+            cm1, cm2 = st.columns(2)
+            cm1.metric("Producción detectada", f"{_resumen.produccion_salud:,.2f} €")
+            cm2.metric(
+                "Rappel estimado",
+                f"{_rappel_periodo.importe:,.2f} €",
+                help=_rappel_periodo.nota,
+            )
+
+st.divider()
 
 # --- Tabs -----------------------------------------------------------------
 # NOTA sobre "periodo" en este dashboard — no es la misma noción en todas

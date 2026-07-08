@@ -184,6 +184,68 @@ def test_rappel_cuenta_poliza_de_fin_de_mes_en_su_periodo_real(tmp_path, monkeyp
     assert metricas["Producción estimada del mes"] == "480.00 €"
 
 
+def test_vista_rapida_avisa_si_mes_siguiente_no_tiene_datos_y_suma_bien_el_actual(
+    tmp_path, monkeypatch
+):
+    """Bloque "📅 Vista rápida" visible antes de las pestañas: el mes actual
+    (con datos) debe sumar la producción real; el mes siguiente (sin
+    ningún recibo todavía) debe mostrar el aviso de "todavía no hay
+    datos", nunca un 0€ que parezca "no has vendido nada". Fechas
+    generadas relativas a date.today() para que no caduque con el tiempo.
+    """
+    hoy = date.today()
+    periodo_actual = f"{hoy.year:04d}-{hoy.month:02d}"
+    if hoy.month == 12:
+        periodo_siguiente = f"{hoy.year + 1:04d}-01"
+    else:
+        periodo_siguiente = f"{hoy.year:04d}-{hoy.month + 1:02d}"
+    fecha_efecto_mes_actual = f"01/{hoy.month:02d}/{hoy.year:04d}"
+
+    polizas_csv = tmp_path / "polizas_vista_rapida.csv"
+    polizas_csv.write_text(
+        "AGENTE;ORDEN NIF;NOMBRE AGENTE;CLIENTE;RAZON SOCIAL;POLIZA;ORDEN;PRODUCTO BASE;"
+        "PRODUCTO;FECHA GRAB;FECHA ALTA;FECHA BAJA;FORMA PAGO;SITUACION POLIZA;"
+        "INDICADOR DE FACTURACION;NIF TOMADOR;NOMBRE TOMADOR;PRIMER APELLIDO TOMADOR;"
+        "SEGUNDO APELLIDO TOMADOR;DIRECCION TOMADOR;C  POSTAL TOMADOR;POBLACION TOMADOR;"
+        "PROVINCIA TOMADOR;TELEFONO TOMADOR;F  NACIMIENTO TOMADOR;NIF ASEGURADO;"
+        "NOMBRE ASEGURADO;PRIMER APELLIDO ASEGURADO;SEGUNDO APELLIDO ASEGURADO;"
+        "DIRECCION ASEGURADO;C  POSTAL ASEGURADO;POBLACION ASEGURADO;PROVINCIA ASEGURADO;"
+        "TELEFONO ASEGURADO;F  NACIMIENTOASEGURADO;DELEGACION;DESCRIPCION;PER  LIQUIDACION;"
+        "SUBAGENTE\n"
+        f"00000000X;0;AGENTE PRUEBA;90200;ASISA PARTICULARES;64300001;0;"
+        f"ASISTENCIA SANITARIA;101049;{fecha_efecto_mes_actual};{fecha_efecto_mes_actual};"
+        f"01/01/1900;M;A;S;X0000200A;NOMBRE;APELLIDO1;APELLIDO2;Calle Real 1;28000;MADRID;"
+        f"Madrid;+34600000200;01/01/1990;X0000200A;NOMBRE;APELLIDO1;APELLIDO2;Calle Real 1;"
+        f"28000;MADRID;Madrid;+34600000200;01/01/1990;2800;MADRID;{periodo_actual};\n",
+        encoding="utf-8",
+    )
+    facturacion_csv = tmp_path / "facturacion_vista_rapida.csv"
+    facturacion_csv.write_text(
+        "CLIENTE;CARTERA;OPERACION;POLIZA;NOMBRE CLIENTE;FECHA DESDE;FECHA HASTA;"
+        "PRIMA NETA;PRIMA TOTAL;PER. LIQUIDACION\n"
+        f"90200;ASISTENCIA SANITARIA;CARTERA;64300001;ASISA PARTICULARES;"
+        f"{fecha_efecto_mes_actual};{fecha_efecto_mes_actual};40,00;40,10;{periodo_actual}\n",
+        encoding="utf-8",
+    )
+
+    db_path, conn = _nueva_db(tmp_path, "vista_rapida.db")
+    cargar_polizas(conn, parsear_polizas(polizas_csv))
+    cargar_facturacion(conn, parsear_facturacion(facturacion_csv))
+    conn.close()
+
+    at = _correr_app(db_path, monkeypatch)
+    assert at.exception == []
+
+    # Mes siguiente: sin ningún dato -> aviso, NUNCA un 0€ desnudo.
+    assert any(
+        f"Todavía no hay datos de {periodo_siguiente}" in i.value for i in at.info
+    )
+
+    # Mes actual: sí hay datos -> suma correctamente (40€ x12 = 480€).
+    metricas = {m.label: m.value for m in at.metric}
+    assert metricas["Producción detectada"] == "480.00 €"
+
+
 def test_resumen_no_mezcla_rappel_de_salud_y_vida(tmp_path, monkeypatch):
     """Caso real confirmado (junio 2026): ASISA Salud rappel=1.200€,
     factura=2.082,89€; ASISA Vida rappel=0€ (nunca aplica), factura=109,45€,
