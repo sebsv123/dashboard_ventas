@@ -104,9 +104,17 @@ def estimar_comision_poliza(
     tipo = clasificar_poliza(fila_poliza, contrato)
     razon_social = fila_poliza["razon_social"]
     fecha_efecto: date | None = fila_poliza["fecha_efecto"]
+    # OJO: cuando fecha_efecto viene de una consulta SQL (pd.read_sql con
+    # parse_dates), un valor nulo llega como pd.NaT, no como None — y
+    # bool(pd.NaT) es True, así que un simple "if fecha_efecto" no basta
+    # para detectar la ausencia de fecha (se creía comprobado, no lo estaba).
+    tiene_fecha_efecto = fecha_efecto is not None and not pd.isna(fecha_efecto)
     ref = fecha_referencia if fecha_referencia is not None else date.today()
-    meses_transcurridos = _meses_transcurridos(fecha_efecto, ref) if fecha_efecto else 0
+    meses_transcurridos = _meses_transcurridos(fecha_efecto, ref) if tiene_fecha_efecto else 0
     es_primer_anio = meses_transcurridos < 12
+    mes_devengo = (
+        f"{fecha_efecto.year:04d}-{fecha_efecto.month:02d}" if tiene_fecha_efecto else ""
+    )
 
     if tipo == TIPO_VIDA:
         pct = _pct_comision_vida(contrato, razon_social, meses_transcurridos)
@@ -114,7 +122,7 @@ def estimar_comision_poliza(
         return EstimacionComision(
             poliza=fila_poliza["poliza"],
             tipo=tipo,
-            mes_devengo=f"{fecha_efecto.year:04d}-{fecha_efecto.month:02d}" if fecha_efecto else "",
+            mes_devengo=mes_devengo,
             comision_bruta_estimada=round(base * pct, 2),
             confianza="alta",
             nota="Vida: comisión por recibo, sin rappel.",
@@ -125,7 +133,7 @@ def estimar_comision_poliza(
         return EstimacionComision(
             poliza=fila_poliza["poliza"],
             tipo=tipo,
-            mes_devengo=f"{fecha_efecto.year:04d}-{fecha_efecto.month:02d}" if fecha_efecto else "",
+            mes_devengo=mes_devengo,
             comision_bruta_estimada=round(prima_anual * pct, 2),
             confianza="alta",
             nota=(
@@ -140,7 +148,7 @@ def estimar_comision_poliza(
     return EstimacionComision(
         poliza=fila_poliza["poliza"],
         tipo=tipo,
-        mes_devengo=f"{fecha_efecto.year:04d}-{fecha_efecto.month:02d}" if fecha_efecto else "",
+        mes_devengo=mes_devengo,
         comision_bruta_estimada=round(prima_anual * pct, 2),
         confianza="media",
         nota=(

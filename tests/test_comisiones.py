@@ -129,3 +129,15 @@ def test_estimacion_vida_escalado_segundo_anio(contrato):
         fecha_referencia=date(2026, 7, 15),
     )
     assert estimacion.comision_bruta_estimada == pytest.approx(30.0)
+
+
+def test_estimacion_con_fecha_efecto_nat_no_rompe(contrato):
+    # fecha_efecto llega como pd.NaT (no None) cuando la póliza se lee de la
+    # BD vía pd.read_sql con parse_dates y el valor es NULL. bool(pd.NaT) es
+    # True, así que un "if fecha_efecto" ingenuo no lo detecta y explota al
+    # formatear mes_devengo. No debe reventar ni malcalcular: se trata como
+    # fecha desconocida (equivalente a primer año, mes_devengo vacío).
+    fila = _fila("ASISA PARTICULARES", "A", pd.NaT)
+    estimacion = estimar_comision_poliza(fila, contrato, prima_anual=1000.0)
+    assert estimacion.mes_devengo == ""
+    assert estimacion.comision_bruta_estimada == pytest.approx(250.0)  # primer año, 25%
