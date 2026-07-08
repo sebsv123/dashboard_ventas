@@ -21,6 +21,15 @@ from db.carga import cargar_facturacion, cargar_liquidacion, cargar_polizas, car
 from db.schema import conectar, inicializar_schema
 from engine.comisiones import estimar_comision_poliza
 from engine.config_contrato import cargar_contrato
+from engine.insights import (
+    alertas_cambio_tarifa,
+    construir_produccion_polizas,
+    evolucion_mensual,
+    hay_suficiente_historico,
+    ranking_productos,
+    ranking_provincias,
+    variacion_mes_actual_vs_anterior,
+)
 from engine.proyeccion import proyectar_cierre_mes
 from engine.rappel import calcular_rappel_inicial
 from engine.reconciliacion import detectar_polizas_sin_cobrar
@@ -150,8 +159,8 @@ if df_polizas.empty and df_facturacion.empty:
     st.stop()
 
 # --- Tabs -----------------------------------------------------------------
-tab_resumen, tab_polizas, tab_rappel, tab_alertas = st.tabs(
-    ["📊 Resumen", "📋 Pólizas", "🎯 Rappel", "⚠️ Alertas"]
+tab_resumen, tab_polizas, tab_rappel, tab_alertas, tab_insights = st.tabs(
+    ["📊 Resumen", "📋 Pólizas", "🎯 Rappel", "⚠️ Alertas", "📈 Insights"]
 )
 
 # =============================================================================
@@ -341,3 +350,95 @@ with tab_alertas:
                     st.write(f"**Fecha de efecto:** {a.fecha_efecto}")
                     st.write(a.nota)
                     st.text_area("Resolución (tu nota, ej. 'error mío' / 'error ASISA')", key=f"nota_{a.poliza}")
+
+# =============================================================================
+# TAB: Insights
+# =============================================================================
+with tab_insights:
+    st.subheader("Histórico y tendencias")
+    st.caption(
+        "Esta pestaña mira SIEMPRE todo el histórico de la base de datos, "
+        "igual que Alertas — ignora el selector de periodo de las demás vistas."
+    )
+
+    df_produccion = construir_produccion_polizas(df_polizas, df_facturacion, contrato)
+
+    if df_produccion.empty:
+        st.info("Todavía no hay pólizas con fecha de efecto para calcular insights.")
+    elif not hay_suficiente_historico(df_produccion):
+        st.warning(
+            "⚠️ Necesitas más histórico para ver tendencias (al menos 2 meses "
+            "distintos de datos). De momento solo se muestran los rankings."
+        )
+
+    if not df_produccion.empty:
+        if hay_suficiente_historico(df_produccion):
+            st.markdown("### Evolución mensual de producción")
+            evolucion = evolucion_mensual(df_produccion)
+
+            fig_polizas = px.line(
+                evolucion, x="periodo", y="polizas_nuevas", color="tipo", markers=True,
+                color_discrete_map={"salud": AZUL_ASISA, "vida": "#F2A900"},
+                title="Nº de pólizas nuevas por mes",
+            )
+            st.plotly_chart(fig_polizas, use_container_width=True)
+
+            fig_prima = px.line(
+                evolucion, x="periodo", y="prima_anual_total", color="tipo", markers=True,
+                color_discrete_map={"salud": AZUL_ASISA, "vida": "#F2A900"},
+                title="Prima anualizada total por mes",
+            )
+            st.plotly_chart(fig_prima, use_container_width=True)
+
+            st.markdown("### Mes a mes")
+            variacion = variacion_mes_actual_vs_anterior(df_produccion, date.today())
+            if variacion.tendencia == "sin_datos":
+                st.info(
+                    f"Sin producción registrada en {variacion.periodo_anterior} "
+                    "para poder comparar."
+                )
+            else:
+                flecha = "↑" if variacion.tendencia == "subida" else "↓"
+                st.metric(
+                    f"Producción {variacion.periodo_actual} vs {variacion.periodo_anterior}",
+                    f"{variacion.produccion_actual:,.2f} €",
+                    delta=f"{flecha} {variacion.variacion_pct:.1f}%",
+                )
+
+        st.divider()
+        col_rank1, col_rank2 = st.columns(2)
+        with col_rank1:
+            st.markdown("### Ranking de productos")
+            fig_prod = px.bar(
+                ranking_productos(df_produccion).head(10),
+                x="prima_anual_total", y="razon_social", orientation="h",
+                color_discrete_sequence=[AZUL_ASISA],
+            )
+            fig_prod.update_layout(yaxis={"categoryorder": "total ascending"})
+            st.plotly_chart(fig_prod, use_container_width=True)
+
+        with col_rank2:
+            st.markdown("### Ranking de provincias")
+            fig_prov = px.bar(
+                ranking_provincias(df_produccion).head(10),
+                x="prima_anual_total", y="provincia_tomador", orientation="h",
+                color_discrete_sequence=[AZUL_ASISA],
+            )
+            fig_prov.update_layout(yaxis={"categoryorder": "total ascending"})
+            st.plotly_chart(fig_prov, use_container_width=True)
+
+    st.divider()
+    st.markdown("### Próximos cambios de tarifa")
+    st.caption(
+        "Pólizas de salud mensual a menos de 60 días de cumplir su primer año: "
+        "van a pasar de % producción a % mantenimiento."
+    )
+    alertas_tarifa = alertas_cambio_tarifa(df_polizas, contrato, date.today())
+    if not alertas_tarifa:
+        st.success("✅ Ninguna póliza próxima a cambiar de tarifa ahora mismo.")
+    else:
+        for a in alertas_tarifa:
+            st.warning(
+                f"Póliza {a.poliza} ({a.razon_social}): {a.dias_para_cambio} días "
+                f"para el cambio de tarifa. {a.nota}"
+            )
