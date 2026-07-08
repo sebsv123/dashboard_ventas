@@ -156,3 +156,7 @@ periodo_devengo:
 alertas:
   dias_margen_antes_de_alertar: 45   # días desde fecha de efecto sin aparecer
                                        # en Liquidación antes de marcar "revisar"
+  dias_antelacion_cambio_tarifa: 60  # aviso de "cambio de tarifa próximo" en
+                                       # Insights: pólizas de salud mensual a
+                                       # menos de estos días de cumplir 1 año
+                                       # (paso de % producción a % mantenimiento)

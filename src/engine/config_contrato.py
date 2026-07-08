@@ -78,6 +78,10 @@ class ContratoConfig(BaseModel):
     def dias_margen_alerta(self) -> int:
         return self.alertas["dias_margen_antes_de_alertar"]
 
+    @property
+    def dias_antelacion_cambio_tarifa(self) -> int:
+        return self.alertas["dias_antelacion_cambio_tarifa"]
+
 
 @lru_cache(maxsize=1)
 def cargar_contrato(path: str | Path = "config/contrato.yaml") -> ContratoConfig:

@@ -18,7 +18,6 @@ from engine.comisiones import fecha_cambio_a_mantenimiento
 from engine.config_contrato import ContratoConfig
 
 MESES_MINIMOS_PARA_TENDENCIA = 2
-DIAS_ANTELACION_CAMBIO_TARIFA = 60
 
 COLUMNAS_PRODUCCION = [
     "poliza", "razon_social", "provincia_tomador", "forma_pago",
@@ -153,7 +152,8 @@ class AlertaCambioTarifa:
 def alertas_cambio_tarifa(
     df_polizas: pd.DataFrame, contrato: ContratoConfig, fecha_referencia: date
 ) -> list[AlertaCambioTarifa]:
-    """Pólizas de salud mensual a menos de 60 días de pasar a % mantenimiento.
+    """Pólizas de salud mensual a menos de `contrato.dias_antelacion_cambio_tarifa`
+    días de pasar a % mantenimiento.
 
     Información accionable real: saber que la comisión de una póliza va a
     bajar pronto (de % producción a % mantenimiento del año 2 en adelante).
@@ -179,7 +179,7 @@ def alertas_cambio_tarifa(
         # años bisiestos o fechas de efecto a fin de mes).
         aniversario = fecha_cambio_a_mantenimiento(fecha_efecto)
         dias_para_cambio = (aniversario - fecha_referencia).days
-        if 0 < dias_para_cambio <= DIAS_ANTELACION_CAMBIO_TARIFA:
+        if 0 < dias_para_cambio <= contrato.dias_antelacion_cambio_tarifa:
             alertas.append(
                 AlertaCambioTarifa(
                     poliza=fila["poliza"],

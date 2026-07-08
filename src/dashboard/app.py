@@ -438,8 +438,8 @@ with tab_insights:
     st.divider()
     st.markdown("### Próximos cambios de tarifa")
     st.caption(
-        "Pólizas de salud mensual a menos de 60 días de cumplir su primer año: "
-        "van a pasar de % producción a % mantenimiento."
+        f"Pólizas de salud mensual a menos de {contrato.dias_antelacion_cambio_tarifa} "
+        "días de cumplir su primer año: van a pasar de % producción a % mantenimiento."
     )
     alertas_tarifa = alertas_cambio_tarifa(df_polizas, contrato, date.today())
     if not alertas_tarifa:

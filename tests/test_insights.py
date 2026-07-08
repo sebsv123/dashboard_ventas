@@ -123,3 +123,24 @@ def test_alertas_cambio_tarifa_usa_fecha_cambio_a_mantenimiento_compartida(
     esperado = fecha_cambio_a_mantenimiento(date(2026, 6, 1))
     assert f"Cumple 1 año el {esperado.isoformat()}" in alertas[0].nota
     assert alertas[0].dias_para_cambio == (esperado - date(2027, 4, 15)).days
+
+
+def test_alertas_cambio_tarifa_respeta_el_umbral_del_yaml(df_polizas, tmp_path):
+    # El umbral de aviso (60 días) debe venir de config/contrato.yaml, no de
+    # una constante en el código: si se reduce en el YAML, el motor debe
+    # dejar de avisar de una póliza que antes sí entraba en la ventana.
+    texto_original = CONFIG_PATH.read_text(encoding="utf-8")
+    assert "dias_antelacion_cambio_tarifa: 60" in texto_original
+    texto_modificado = texto_original.replace(
+        "dias_antelacion_cambio_tarifa: 60", "dias_antelacion_cambio_tarifa: 10"
+    )
+    config_temporal = tmp_path / "contrato_umbral_bajo.yaml"
+    config_temporal.write_text(texto_modificado, encoding="utf-8")
+
+    contrato_umbral_bajo = cargar_contrato(config_temporal)
+    assert contrato_umbral_bajo.dias_antelacion_cambio_tarifa == 10
+
+    # 70000001 está a 47 días de cumplir el año: entra con el umbral de 60
+    # por defecto, pero no con uno de 10.
+    alertas = alertas_cambio_tarifa(df_polizas, contrato_umbral_bajo, date(2027, 4, 15))
+    assert alertas == []
