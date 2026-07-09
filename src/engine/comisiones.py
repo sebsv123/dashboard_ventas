@@ -18,17 +18,33 @@ Tres mecánicas distintas, todas validadas contra datos reales de Sebastián
      los meses posteriores de la misma póliza no deberían generar comisión
      nueva, pero esto se marca siempre como estimación de confianza media,
      nunca como hecho, hasta reconciliar con la Liquidación real.
+
+     Refinamiento (`refinar_confianza_salud_mensual`): no hemos encontrado
+     una fórmula fiable para predecir el IMPORTE de esas regularizaciones,
+     pero el propio historial real de Liquidación de cada póliza sí dice
+     si esa póliza YA tuvo algún ajuste alguna vez (casos reales: 63938090,
+     con un EXTORNO ANUALIZADA + 3 ANUALIZADA -> historial irregular; frente
+     a 63920702, con un único ANUALIZADA -> sin ajustes conocidos). Eso basta
+     para avisar de qué pólizas concretas son más inciertas, sin necesidad de
+     acertar el importe.
 """
 
 from __future__ import annotations
 
 import calendar
+import dataclasses
 from dataclasses import dataclass
 from datetime import date
 
 import pandas as pd
 
 from engine.config_contrato import ContratoConfig
+
+# Acciones del historial real de Liquidación que representan un ajuste de
+# la comisión anualizada de una póliza de salud mensual (el anticipo
+# original es "ANUALIZADA"; un ajuste posterior puede ser un nuevo evento
+# "ANUALIZADA" o un "EXTORNO ANUALIZADA" que lo revierte).
+ACCIONES_AJUSTE_ANUALIZADA = ("ANUALIZADA", "EXTORNO ANUALIZADA")
 
 TIPO_VIDA = "vida"
 TIPO_SALUD_ANUAL = "salud_anual"
@@ -41,7 +57,7 @@ class EstimacionComision:
     tipo: str
     mes_devengo: str  # "AAAA-MM"
     comision_bruta_estimada: float
-    confianza: str  # "alta" | "media"
+    confianza: str  # "alta" | "media" | "baja"
     nota: str = ""
 
 
@@ -234,3 +250,99 @@ def estimar_comision_poliza(
 def aplicar_retencion(importe_bruto: float, contrato: ContratoConfig) -> float:
     """Comisión/rappel neto tras aplicar la retención de IRPF configurada."""
     return round(importe_bruto * (1 - contrato.retencion_irpf), 2)
+
+
+@dataclass
+class HistorialAjustesPoliza:
+    poliza: str
+    tiene_ajustes_previos: bool  # más de 1 evento ANUALIZADA/EXTORNO ANUALIZADA
+    num_eventos: int
+    ultimo_periodo: str | None = None
+    ultimo_importe: float | None = None
+    ultimo_accion: str | None = None
+
+
+def _periodo_liquidacion_ordenable(periodo: str) -> str:
+    """Normaliza un periodo de Liquidación a "AAAA-MM" para poder ordenar
+    cronológicamente.
+
+    OJO: en los ficheros reales de ASISA, Liquidación usa "MM-AAAA"
+    (confirmado con datos reales: "02-2026"), al revés que Facturación/
+    Factura PDF, que usan "AAAA-MM" — se detecta cuál es cuál por longitud
+    (4 dígitos es el año) en vez de asumir un orden fijo (mismo criterio
+    que `_formatear_periodos` en el dashboard).
+    """
+    partes = str(periodo).split("-")
+    if len(partes) != 2:
+        return str(periodo)
+    a, b = partes
+    return f"{a}-{b}" if len(a) == 4 else f"{b}-{a}"
+
+
+def evaluar_historial_ajustes_poliza(df_liquidacion: pd.DataFrame, poliza: str) -> HistorialAjustesPoliza:
+    """Cuenta apariciones de eventos ANUALIZADA/EXTORNO ANUALIZADA en el
+    historial real de Liquidación de una póliza de salud mensual.
+
+    No intenta predecir el importe del próximo ajuste (no sigue una
+    fórmula fiable) — solo distingue pólizas cuyo historial nunca mostró
+    más de un evento de este tipo (probablemente sin ajustes todavía) de
+    las que ya tuvieron alguno (más inciertas de cara a la estimación).
+    """
+    if df_liquidacion.empty:
+        return HistorialAjustesPoliza(poliza, tiene_ajustes_previos=False, num_eventos=0)
+
+    eventos = df_liquidacion[
+        (df_liquidacion["poliza"] == poliza)
+        & (df_liquidacion["accion"].isin(ACCIONES_AJUSTE_ANUALIZADA))
+    ]
+    if eventos.empty:
+        return HistorialAjustesPoliza(poliza, tiene_ajustes_previos=False, num_eventos=0)
+
+    ordenados = eventos.assign(
+        _orden=eventos["periodo_liquidacion"].map(_periodo_liquidacion_ordenable)
+    ).sort_values("_orden")
+    ultimo = ordenados.iloc[-1]
+    return HistorialAjustesPoliza(
+        poliza=poliza,
+        tiene_ajustes_previos=len(eventos) > 1,
+        num_eventos=len(eventos),
+        ultimo_periodo=ultimo["periodo_liquidacion"],
+        ultimo_importe=float(ultimo["comision"]),
+        ultimo_accion=ultimo["accion"],
+    )
+
+
+def refinar_confianza_salud_mensual(
+    estimacion: EstimacionComision, df_liquidacion: pd.DataFrame
+) -> EstimacionComision:
+    """Afina la confianza de una estimación de Salud mensual con el
+    historial real de Liquidación de esa póliza concreta, en vez de marcar
+    "media" a ciegas para todas por igual.
+
+    - Sin ajustes conocidos en el historial: se mantiene "media" (ver
+      docstring del módulo), pero con una nota explícita de que es una
+      suposición, no un hecho confirmado.
+    - Con algún ajuste ya visto en el pasado (EXTORNO ANUALIZADA o una
+      segunda ANUALIZADA): baja a "baja" — esta póliza concreta ya
+      demostró no seguir el caso simple, así que es más probable que la
+      estimación actual tampoco encaje.
+    """
+    if estimacion.tipo != TIPO_SALUD_MENSUAL:
+        return estimacion
+
+    historial = evaluar_historial_ajustes_poliza(df_liquidacion, estimacion.poliza)
+
+    if not historial.tiene_ajustes_previos:
+        nota = (
+            f"{estimacion.nota} Sin ajustes históricos conocidos para esta "
+            "póliza — asumimos que se mantiene así, pero no está garantizado."
+        )
+        return dataclasses.replace(estimacion, confianza="media", nota=nota)
+
+    nota = (
+        f"{estimacion.nota} Esta póliza ya tuvo ajustes de comisión en el "
+        f"pasado (último conocido: {historial.ultimo_accion} de "
+        f"{historial.ultimo_importe:.2f} € en {historial.ultimo_periodo}); "
+        "es más probable que su comisión real difiera de esta estimación."
+    )
+    return dataclasses.replace(estimacion, confianza="baja", nota=nota)
