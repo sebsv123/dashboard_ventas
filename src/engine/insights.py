@@ -14,7 +14,7 @@ from datetime import date
 
 import pandas as pd
 
-from engine.comisiones import fecha_cambio_a_mantenimiento
+from engine.comisiones import evaluar_historial_ajustes_poliza, fecha_cambio_a_mantenimiento
 from engine.config_contrato import ContratoConfig
 
 MESES_MINIMOS_PARA_TENDENCIA = 2
@@ -271,3 +271,55 @@ def alertas_cambio_tarifa(
                 )
             )
     return sorted(alertas, key=lambda a: a.dias_para_cambio)
+
+
+@dataclass
+class PolizaHistorialIrregular:
+    poliza: str
+    ultimo_periodo: str
+    ultimo_importe: float
+    ultimo_accion: str
+
+
+def polizas_salud_mensual_historial_irregular(
+    df_polizas: pd.DataFrame,
+    df_facturacion: pd.DataFrame,
+    df_liquidacion: pd.DataFrame,
+    contrato: ContratoConfig,
+    periodo: str,
+) -> list[PolizaHistorialIrregular]:
+    """Pólizas de salud mensual dadas de alta en `periodo` cuyo historial de
+    Liquidación ya mostró algún ajuste (ver
+    `engine.comisiones.evaluar_historial_ajustes_poliza`) — las candidatas
+    más inciertas de la producción de este mes, pensado para el aviso
+    agregado de Rappel/Vista rápida.
+    """
+    if df_facturacion.empty or df_polizas.empty or df_liquidacion.empty:
+        return []
+
+    altas = primeras_altas_por_periodo(df_facturacion)
+    altas = altas[altas["periodo_liquidacion"] == periodo]
+    if altas.empty:
+        return []
+
+    fusion = altas.merge(
+        df_polizas[["poliza", "forma_pago", "razon_social"]], on="poliza", how="inner"
+    )
+    candidatas = fusion[
+        (fusion["forma_pago"] == "M")
+        & (~fusion["razon_social"].isin(contrato.comisiones_vida.keys()))
+    ]
+
+    resultado = []
+    for poliza in candidatas["poliza"]:
+        historial = evaluar_historial_ajustes_poliza(df_liquidacion, poliza)
+        if historial.tiene_ajustes_previos:
+            resultado.append(
+                PolizaHistorialIrregular(
+                    poliza=poliza,
+                    ultimo_periodo=historial.ultimo_periodo,
+                    ultimo_importe=historial.ultimo_importe,
+                    ultimo_accion=historial.ultimo_accion,
+                )
+            )
+    return resultado

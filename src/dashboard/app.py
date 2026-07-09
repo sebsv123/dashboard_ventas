@@ -27,7 +27,7 @@ from db.carga import (
 )
 from db.schema import conectar, inicializar_schema
 from engine.calibracion import calcular_calibracion
-from engine.comisiones import estimar_comision_poliza
+from engine.comisiones import estimar_comision_poliza, resumen_historial_ajustes_cartera
 from engine.config_contrato import cargar_contrato
 from engine.fiscal import anios_disponibles, calcular_retenciones_anio
 from engine.objetivo import calcular_objetivo_anual
@@ -36,6 +36,7 @@ from engine.insights import (
     construir_produccion_polizas,
     evolucion_mensual,
     hay_suficiente_historico,
+    polizas_salud_mensual_historial_irregular,
     primeras_altas_por_periodo,
     ranking_productos,
     ranking_provincias,
@@ -149,6 +150,38 @@ def _formatear_periodos(periodos: list[str]) -> str:
     if invalidos:
         texto = f"{texto}; {', '.join(invalidos)}" if texto else ", ".join(invalidos)
     return texto
+
+
+def _mostrar_aviso_historial_irregular(periodo: str) -> None:
+    """Aviso agregado + detalle expandible de pólizas de salud mensual con
+    historial de ajustes irregulares entre las altas de `periodo`. Compartido
+    por Vista rápida y la pestaña Rappel — mismo criterio, mismo aviso."""
+    irregulares = polizas_salud_mensual_historial_irregular(
+        df_polizas, df_facturacion, df_liquidacion, contrato, periodo
+    )
+    if not irregulares:
+        return
+    st.warning(
+        f"⚠️ {len(irregulares)} de tus pólizas de salud mensual de este mes "
+        "tienen historial de ajustes irregulares (ver detalle) — la "
+        "estimación total puede desviarse más de lo habitual por esto."
+    )
+    with st.expander("Ver pólizas a vigilar"):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Póliza": p.poliza,
+                        "Último ajuste conocido": p.ultimo_accion,
+                        "Periodo del ajuste": p.ultimo_periodo,
+                        "Importe (€)": p.ultimo_importe,
+                    }
+                    for p in irregulares
+                ]
+            ),
+            width="stretch",
+            hide_index=True,
+        )
 
 
 # --- Sidebar: subida de ficheros ----------------------------------------------
@@ -296,6 +329,7 @@ for _col, _periodo, _etiqueta in (
                 f"{_rappel_periodo.importe:,.2f} €",
                 help=_rappel_periodo.nota,
             )
+            _mostrar_aviso_historial_irregular(_periodo)
 
 st.divider()
 
@@ -474,6 +508,8 @@ with tab_rappel:
 
     st.progress(min(resultado_rappel.porcentaje_objetivo / 100, 1.0))
     st.caption(f"{resultado_rappel.porcentaje_objetivo:.1f}% del objetivo del tramo actual")
+
+    _mostrar_aviso_historial_irregular(mes_texto)
 
     # Proyección de cierre de mes: solo tiene sentido para el mes en curso
     # (esta pestaña, de momento, siempre calcula sobre "hoy").
@@ -841,3 +877,27 @@ with tab_calibracion:
             )
             for e in resultado_calibracion.excluidos:
                 st.warning(f"**{e.periodo}**: {e.motivo}")
+
+    st.divider()
+    st.markdown("### ¿Por qué el rango de error es tan amplio?")
+    _resumen_historial = resumen_historial_ajustes_cartera(df_polizas, df_liquidacion, contrato)
+    if _resumen_historial.total_salud_mensual and _resumen_historial.pct_irregular is not None:
+        _pct_sin_ajustes = round(100 - _resumen_historial.pct_irregular, 1)
+        st.info(
+            "📎 Investigación real sobre la regularización de Salud mensual: en la "
+            f"cartera actual, {_resumen_historial.total_salud_mensual - _resumen_historial.con_historial_irregular} "
+            f"de {_resumen_historial.total_salud_mensual} pólizas de salud mensual "
+            f"({_pct_sin_ajustes}%) nunca han mostrado más de un evento de ajuste en "
+            "Liquidación — se comportan como el caso simple del contrato (anticipo "
+            "íntegro, sin regularización posterior). El resto sí tuvo algún ajuste "
+            "(EXTORNO ANUALIZADA o una segunda ANUALIZADA), pero el importe y el "
+            "momento varían de forma no predecible póliza a póliza — no siguen una "
+            "fórmula común. Por eso el motor no intenta adivinar el importe del "
+            "ajuste, solo avisa (en Rappel/Vista rápida) de qué pólizas concretas "
+            "del mes ya tienen ese historial irregular."
+        )
+    else:
+        st.caption(
+            "Todavía no hay suficientes datos de Pólizas/Liquidación para calcular "
+            "esta cifra de contexto."
+        )

@@ -346,3 +346,43 @@ def refinar_confianza_salud_mensual(
         "es más probable que su comisión real difiera de esta estimación."
     )
     return dataclasses.replace(estimacion, confianza="baja", nota=nota)
+
+
+@dataclass
+class ResumenHistorialAjustesCartera:
+    """Cuántas pólizas de salud mensual de TODA la cartera (no solo las del
+    mes en curso) tienen historial de ajustes irregulares, para explicar
+    de dónde viene el rango de error del motor en la pestaña Calibración."""
+
+    total_salud_mensual: int
+    con_historial_irregular: int
+
+    @property
+    def pct_irregular(self) -> float | None:
+        if not self.total_salud_mensual:
+            return None
+        return round(100 * self.con_historial_irregular / self.total_salud_mensual, 1)
+
+
+def resumen_historial_ajustes_cartera(
+    df_polizas: pd.DataFrame, df_liquidacion: pd.DataFrame, contrato: ContratoConfig
+) -> ResumenHistorialAjustesCartera:
+    """Recorre toda la cartera de salud mensual y cuenta cuántas pólizas ya
+    mostraron algún ajuste en su historial de Liquidación (ver
+    `evaluar_historial_ajustes_poliza`). Es una foto de la cartera completa,
+    no de un periodo concreto — pensada para dar contexto agregado, no para
+    decidir la confianza de una estimación individual (eso lo hace
+    `refinar_confianza_salud_mensual`, póliza a póliza).
+    """
+    if df_polizas.empty:
+        return ResumenHistorialAjustesCartera(0, 0)
+
+    salud_mensual = df_polizas[
+        (df_polizas["forma_pago"] == "M")
+        & (~df_polizas["razon_social"].isin(contrato.comisiones_vida.keys()))
+    ]
+    con_historial_irregular = sum(
+        evaluar_historial_ajustes_poliza(df_liquidacion, poliza).tiene_ajustes_previos
+        for poliza in salud_mensual["poliza"]
+    )
+    return ResumenHistorialAjustesCartera(len(salud_mensual), con_historial_irregular)
