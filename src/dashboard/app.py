@@ -26,6 +26,7 @@ from db.carga import (
     recalcular_resumen_mensual,
 )
 from db.schema import conectar, inicializar_schema
+from engine.calibracion import calcular_calibracion
 from engine.comisiones import estimar_comision_poliza
 from engine.config_contrato import cargar_contrato
 from engine.fiscal import anios_disponibles, calcular_retenciones_anio
@@ -312,10 +313,10 @@ st.divider()
 #   - Insights: todo el histórico (como Resumen), pero al agrupar "por mes"
 #     también usa periodo_liquidacion vía construir_produccion_polizas,
 #     por la misma razón que Rappel.
-tab_resumen, tab_polizas, tab_rappel, tab_alertas, tab_insights, tab_irpf, tab_objetivo = st.tabs(
+tab_resumen, tab_polizas, tab_rappel, tab_alertas, tab_insights, tab_irpf, tab_objetivo, tab_calibracion = st.tabs(
     [
         "📊 Resumen", "📋 Pólizas", "🎯 Rappel", "⚠️ Alertas", "📈 Insights",
-        "💶 Retenciones IRPF", "🎯 Objetivo anual",
+        "💶 Retenciones IRPF", "🎯 Objetivo anual", "📐 Calibración",
     ]
 )
 
@@ -766,3 +767,77 @@ with tab_objetivo:
     )
     st.plotly_chart(fig_objetivo, width="stretch")
     st.dataframe(tabla_meses, width="stretch", hide_index=True)
+
+# =============================================================================
+# TAB: Calibración del motor — estimado vs. real
+# =============================================================================
+with tab_calibracion:
+    st.subheader("Calibración del motor — estimado vs. real")
+    st.caption(
+        "Para cada periodo donde YA hay Facturación+Pólizas completas Y "
+        "Factura PDF real, recalcula lo que el motor de estimación (el "
+        "mismo de Rappel y Vista rápida: `estimar_comision_poliza` + "
+        "`calcular_rappel_inicial`) habría predicho, ignorando el dato "
+        "real, y lo compara contra la Factura PDF de ese mismo mes. "
+        "Sirve para saber cuánto fiarse del número en pantalla mientras "
+        "el mes está en curso."
+    )
+
+    resultado_calibracion = calcular_calibracion(df_polizas, df_facturacion, df_factura_pdf, contrato)
+
+    if not resultado_calibracion.periodos and not resultado_calibracion.excluidos:
+        st.info("Sube al menos una Factura PDF para poder calibrar el motor.")
+    else:
+        if resultado_calibracion.periodos:
+            tabla_calibracion = pd.DataFrame(
+                [
+                    {
+                        "Periodo": p.mes,
+                        "Estimado (€)": p.estimado,
+                        "Real (€)": p.real,
+                        "Diferencia (€)": p.diferencia,
+                        "Diferencia (%)": p.diferencia_pct,
+                    }
+                    for p in resultado_calibracion.periodos
+                ]
+            )
+            st.markdown("### Periodos incluidos en la calibración")
+            st.dataframe(tabla_calibracion, width="stretch", hide_index=True)
+
+            c1, c2 = st.columns(2)
+            sesgo_eur = resultado_calibracion.sesgo_medio_eur
+            sesgo_pct = resultado_calibracion.sesgo_medio_pct
+            c1.metric(
+                "Sesgo medio (€)",
+                f"{sesgo_eur:+,.2f} €" if sesgo_eur is not None else "—",
+                help="Estimado - Real, promediado entre los periodos incluidos. "
+                     "Positivo = el motor tiende a pasarse; negativo = a quedarse corto.",
+            )
+            c2.metric(
+                "Sesgo medio (%)",
+                f"{sesgo_pct:+.1f}%" if sesgo_pct is not None else "—",
+                help="Sirve como referencia de +/-X% sobre lo que ves en pantalla "
+                     "mientras el mes está en curso.",
+            )
+
+            fig_calibracion = px.bar(
+                tabla_calibracion, x="Periodo", y=["Estimado (€)", "Real (€)"],
+                barmode="group", color_discrete_sequence=[AZUL_ASISA, "#F2A900"],
+            )
+            st.plotly_chart(fig_calibracion, width="stretch")
+        else:
+            st.info(
+                "Hay Facturas PDF reales, pero ningún periodo tiene "
+                "Facturación/Pólizas completas todavía para poder calibrar."
+            )
+
+        if resultado_calibracion.excluidos:
+            st.divider()
+            st.markdown("### Periodos excluidos de la calibración")
+            st.caption(
+                "Estos meses NO se cuentan como fallos del motor: falta el dato "
+                "de entrada (Facturación/Pólizas) para poder recalcular un "
+                "estimado, así que no hay nada que comparar todavía."
+            )
+            for e in resultado_calibracion.excluidos:
+                st.warning(f"**{e.periodo}**: {e.motivo}")
