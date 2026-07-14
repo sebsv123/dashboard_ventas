@@ -24,6 +24,7 @@ from db.carga import (
     cargar_facturacion,
     cargar_liquidacion,
     cargar_polizas,
+    cargar_polizas_provisionales_eiac,
     cargar_factura_pdf,
     recalcular_resumen_mensual,
 )
@@ -31,6 +32,7 @@ from db.schema import conectar, inicializar_schema
 from engine.calibracion import calcular_calibracion
 from engine.comisiones import estimar_comision_poliza, resumen_historial_ajustes_cartera
 from engine.config_contrato import cargar_contrato
+from engine.eiac_integracion import integrar_eiac
 from engine.fiscal import anios_disponibles, calcular_retenciones_anio
 from engine.objetivo import calcular_objetivo_anual
 from engine.insights import (
@@ -118,6 +120,24 @@ def cargar_datos():
 
 df_polizas, df_facturacion, df_liquidacion, df_factura_pdf, df_eiac_polizas, df_eiac_recibos = cargar_datos()
 
+# EIAC "en vivo": las pólizas provisionales que ya se persistieron en
+# `polizas` (ver sidebar) hacen que df_polizas ya las incluya solo con
+# recargar; esto es un colchón adicional para el caso en que todavía no se
+# hayan persistido (p.ej. datos insertados fuera de la UI) y, sobre todo,
+# para traducir eiac_recibos a la forma de Facturación en cada carga, ya
+# que esos recibos NUNCA se escriben en la tabla `facturacion` (ver
+# engine.eiac_integracion). Solo se usa en Vista rápida/Rappel/Resumen —
+# el resto de pestañas sigue viendo únicamente los datos oficiales.
+_resultado_eiac = integrar_eiac(df_eiac_polizas, df_eiac_recibos, df_polizas)
+df_polizas_con_eiac = (
+    pd.concat([df_polizas, _resultado_eiac.polizas_provisionales], ignore_index=True)
+    if not _resultado_eiac.polizas_provisionales.empty else df_polizas
+)
+df_facturacion_con_eiac = (
+    pd.concat([df_facturacion, _resultado_eiac.facturacion_eiac], ignore_index=True)
+    if not _resultado_eiac.facturacion_eiac.empty else df_facturacion
+)
+
 # --- Cabecera -----------------------------------------------------------------
 col_logo, col_titulo = st.columns([1, 4])
 with col_logo:
@@ -164,7 +184,7 @@ def _mostrar_aviso_historial_irregular(periodo: str) -> None:
     historial de ajustes irregulares entre las altas de `periodo`. Compartido
     por Vista rápida y la pestaña Rappel — mismo criterio, mismo aviso."""
     irregulares = polizas_salud_mensual_historial_irregular(
-        df_polizas, df_facturacion, df_liquidacion, contrato, periodo
+        df_polizas_con_eiac, df_facturacion_con_eiac, df_liquidacion, contrato, periodo
     )
     if not irregulares:
         return
@@ -230,10 +250,11 @@ with st.sidebar:
 
     st.subheader("EIAC (TIREA, XML)")
     st.caption(
-        "Canal separado del resto — usa su propia numeración de póliza "
-        "(TIREA), así que de momento no se cruza con Facturación/Pólizas/"
-        "Liquidación. Se detecta si es de pólizas o de recibos por el "
-        "nombre del fichero (EIAC-ENV-POLI-* / EIAC-ENV-RECI-*)."
+        "Se cruza automáticamente con Pólizas/Facturación por el número de "
+        "póliza (parte final de IdPoliza) — así Rappel/Vista rápida/Resumen "
+        "ya cuentan ventas llegadas solo por EIAC, sin esperar al CSV del "
+        "portal. Se detecta si es de pólizas o de recibos por el nombre "
+        "del fichero (EIAC-ENV-POLI-* / EIAC-ENV-RECI-*)."
     )
     f_eiac = st.file_uploader(
         "Ficheros EIAC (XML)", type="xml", accept_multiple_files=True, key=f"eiac_{uk}"
@@ -269,6 +290,34 @@ with st.sidebar:
                     n = cargar_eiac_recibos(conn, df)
                     mensajes.append(f"EIAC Recibos ({f.name}): {n} filas nuevas importadas.")
 
+            if f_eiac:
+                # Crea en `polizas` las provisionales que EIAC trae y que el
+                # CSV oficial todavía no tiene — se lee el estado actual de
+                # la BD (no la variable df_polizas cacheada) para no perder
+                # pólizas oficiales subidas en este mismo lote.
+                df_polizas_bd = pd.read_sql("SELECT poliza FROM polizas", conn)
+                df_eiac_polizas_bd = pd.read_sql(
+                    "SELECT * FROM eiac_polizas", conn,
+                    parse_dates=["fecha_efecto_inicial", "fecha_emision"],
+                )
+                df_eiac_recibos_bd = pd.read_sql(
+                    "SELECT * FROM eiac_recibos", conn, parse_dates=["fecha_efecto_inicial"]
+                )
+                resultado_integracion = integrar_eiac(df_eiac_polizas_bd, df_eiac_recibos_bd, df_polizas_bd)
+                n_provisionales = cargar_polizas_provisionales_eiac(
+                    conn, resultado_integracion.polizas_provisionales
+                )
+                if n_provisionales:
+                    mensajes.append(
+                        f"EIAC: {n_provisionales} póliza(s) provisional(es) creada(s) en "
+                        "Pólizas (pendientes de confirmar con el CSV oficial)."
+                    )
+                if resultado_integracion.no_reconocidos:
+                    mensajes.append(
+                        f"⚠️ EIAC: {len(resultado_integracion.no_reconocidos)} IdPoliza no "
+                        "reconocido(s) — revisar en '📂 Ficheros ya cargados'."
+                    )
+
             if not mensajes:
                 st.warning("No has seleccionado ningún fichero.")
             else:
@@ -297,10 +346,27 @@ with st.sidebar:
         if df_eiac_polizas.empty and df_eiac_recibos.empty:
             st.caption("**EIAC (TIREA):** ninguno todavía")
         else:
+            n_provisionales_bd = int((df_polizas.get("origen") == "EIAC").sum()) if not df_polizas.empty else 0
             st.caption(
                 f"**EIAC (TIREA):** {len(df_eiac_polizas)} póliza(s), "
-                f"{len(df_eiac_recibos)} recibo(s) (deduplicados) · canal "
-                "separado, sin cruzar con el resto todavía"
+                f"{len(df_eiac_recibos)} recibo(s) (deduplicados) · "
+                f"{n_provisionales_bd} póliza(s) provisional(es) en Pólizas "
+                "pendientes de confirmar con el CSV oficial"
+            )
+        if _resultado_eiac.no_reconocidos:
+            st.warning(
+                f"⚠️ {len(_resultado_eiac.no_reconocidos)} IdPoliza de EIAC no se "
+                "pudieron reconocer (formato inesperado) — revisar manualmente:"
+            )
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {"IdPoliza EIAC": r.id_poliza_eiac, "Motivo": r.motivo}
+                        for r in _resultado_eiac.no_reconocidos
+                    ]
+                ),
+                width="stretch",
+                hide_index=True,
             )
 
     st.divider()
@@ -339,7 +405,7 @@ for _col, _periodo, _etiqueta in (
 ):
     with _col:
         st.markdown(f"**{_etiqueta} · {_periodo}**")
-        _resumen = resumen_produccion_periodo(df_polizas, df_facturacion, contrato, _periodo)
+        _resumen = resumen_produccion_periodo(df_polizas_con_eiac, df_facturacion_con_eiac, contrato, _periodo)
         if not _resumen.tiene_datos:
             st.info(
                 f"Todavía no hay datos de {_periodo} — aparecerán en cuanto "
@@ -396,10 +462,13 @@ tab_resumen, tab_polizas, tab_rappel, tab_alertas, tab_insights, tab_irpf, tab_o
 with tab_resumen:
     st.subheader("Resumen general (cartera completa, sin filtro de periodo)")
 
-    polizas_activas = df_polizas[df_polizas["situacion"] == "A"]
+    polizas_activas = df_polizas_con_eiac[df_polizas_con_eiac["situacion"] == "A"]
     c1, c2 = st.columns(2)
-    c1.metric("Pólizas activas", len(polizas_activas))
-    c2.metric("Provincias distintas", df_polizas["provincia_tomador"].nunique())
+    c1.metric(
+        "Pólizas activas", len(polizas_activas),
+        help="Incluye provisionales de EIAC pendientes de confirmar con el CSV oficial.",
+    )
+    c2.metric("Provincias distintas", df_polizas_con_eiac["provincia_tomador"].nunique())
 
     if not df_factura_pdf.empty:
         st.markdown("**Última factura confirmada, por entidad**")
@@ -505,10 +574,10 @@ with tab_rappel:
     # fecha_efecto de Pólizas — Pólizas es una foto de cartera sin noción de
     # periodo. Ver el docstring de primeras_altas_por_periodo para el caso
     # real que motivó esto (pólizas con efecto 30/06 que devengan en julio).
-    altas_mes = primeras_altas_por_periodo(df_facturacion)
+    altas_mes = primeras_altas_por_periodo(df_facturacion_con_eiac)
     altas_mes = altas_mes[altas_mes["periodo_liquidacion"] == mes_texto]
     altas_mes = altas_mes.merge(
-        df_polizas[["poliza", "forma_pago", "razon_social"]], on="poliza", how="inner"
+        df_polizas_con_eiac[["poliza", "forma_pago", "razon_social"]], on="poliza", how="inner"
     )
 
     nuevas_mes_salud = altas_mes[~altas_mes["razon_social"].isin(contrato.comisiones_vida.keys())]
@@ -534,6 +603,13 @@ with tab_rappel:
         f"{resultado_rappel.importe:,.2f} €",
         help=resultado_rappel.nota,
     )
+
+    _n_altas_eiac = int((altas_mes["poliza"].isin(_resultado_eiac.facturacion_eiac["poliza"])).sum())
+    if _n_altas_eiac:
+        st.caption(
+            f"📐 Incluye {_n_altas_eiac} alta(s) que solo están en EIAC todavía "
+            "(sin Facturación/Pólizas oficial de este periodo)."
+        )
 
     if resultado_rappel.confianza == "media":
         st.warning(

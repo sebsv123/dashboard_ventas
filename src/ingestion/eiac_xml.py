@@ -17,15 +17,20 @@ recibos), no de un fichero EIAC real todavía. Si el primer fichero real
 no encaja exactamente, hay que ajustar los XPath de `_iter_registros`,
 no la forma de los DataFrames de salida (esa parte sí está pactada).
 
-DECISIÓN DE DISEÑO — por qué NO se guarda en `polizas`/`facturacion`:
-`IdPoliza` aquí tiene el formato "codigo_cliente-numero_poliza" (estándar
-TIREA), que es un espacio de numeración distinto al de la columna
-"POLIZA" de los CSV de ASISA. Cruzar ambos sistemas por igualdad directa
-rompería en silencio todo el motor de rappel/comisiones (uniones que no
-casan, filas que desaparecen sin avisar, sin ningún error visible). Por
-eso EIAC vive en sus propias tablas (`eiac_polizas`, `eiac_recibos`) y no
-se cruza —de momento— con el resto del dashboard. Ver docstring de
-`db.schema` para el detalle completo.
+DECISIÓN DE DISEÑO — por qué se guarda en tablas propias, NO directamente
+en `polizas`/`facturacion`: `IdPoliza` aquí tiene el formato
+"codigo_cliente-numero_poliza" (estándar TIREA), un espacio de numeración
+distinto al de la columna "POLIZA" de los CSV de ASISA. Guardar EIAC
+directamente ahí (mezclando ambos espacios de numeración en la misma
+columna) rompería en silencio el motor de rappel/comisiones. Por eso EIAC
+vive en sus propias tablas (`eiac_polizas`, `eiac_recibos`).
+
+ACTUALIZACIÓN: la correspondencia entre ambos espacios de numeración SÍ
+está confirmada (ver `extraer_numero_poliza_asisa`: la parte tras el
+último guión de IdPoliza es el número de póliza ASISA) — `engine.
+eiac_integracion` usa esa correspondencia para cruzar `eiac_recibos`/
+`eiac_polizas` con `polizas`/`facturacion` sin mezclar las tablas brutas
+entre sí. Ver el docstring de ese módulo para el detalle.
 
 Duplicados en Recibos: los ficheros reales de ejemplo traen varias líneas
 para el mismo recibo (un "intento" de cobro por línea, incluida la
@@ -37,6 +42,7 @@ recibo.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -99,11 +105,63 @@ def _decimal(elemento: ET.Element, tag: str) -> float | None:
 
 
 def _partir_id_poliza(id_poliza: str | None) -> tuple[str | None, str | None]:
-    """"codigo_cliente-numero_poliza" -> (codigo_cliente, numero_poliza)."""
+    """"codigo_cliente-numero_poliza" -> (codigo_cliente, numero_poliza).
+
+    Divide por el ÚLTIMO guión (no el primero): `codigo_cliente` podría
+    llevar guiones propios, y la correspondencia confirmada con ASISA es
+    siempre sobre la parte final — ver `extraer_numero_poliza_asisa`.
+    """
     if not id_poliza or "-" not in id_poliza:
         return None, None
-    cliente_codigo, _, numero_poliza = id_poliza.partition("-")
+    cliente_codigo, _, numero_poliza = id_poliza.rpartition("-")
     return cliente_codigo or None, numero_poliza or None
+
+
+@dataclass
+class NumeroPolizaExtraido:
+    id_poliza_eiac: str
+    numero_poliza: str | None
+    reconocido: bool
+    motivo: str | None = None
+
+
+_LONGITUD_MIN_NUMERO_POLIZA = 7
+_LONGITUD_MAX_NUMERO_POLIZA = 8
+
+
+def extraer_numero_poliza_asisa(id_poliza_eiac: str) -> NumeroPolizaExtraido:
+    """Extrae el número de póliza ASISA de un IdPoliza EIAC.
+
+    Correspondencia CONFIRMADA por Sebastián con 5 casos reales cruzados a
+    mano (p.ej. "24848-64276918" -> "64276918"): la parte tras el ÚLTIMO
+    guión de IdPoliza coincide siempre con el número de póliza que usan
+    Facturación/Pólizas/Liquidación de ASISA. Esto NO es una inferencia
+    dudosa — es una regla ya confirmada — pero se valida el formato
+    (numérico puro, 7-8 dígitos, como el resto de números de póliza del
+    proyecto) para no fallar en silencio ante un caso raro: la misma red
+    de seguridad de "confianza" que se usa en el resto del motor, no
+    desconfianza del mapeo en sí.
+
+    OJO — el caso real 64201679/64174100 muestra que, al menos una vez, el
+    número que aparece aquí no fue el mismo que acabó siendo el definitivo
+    en el CSV oficial de Pólizas (posible renumeración/renovación). Un
+    formato válido (numérico, 7-8 dígitos) no garantiza que sea el número
+    definitivo, solo que tiene la forma correcta — por eso el código que
+    usa este resultado para crear pólizas provisionales nunca debe
+    sobreescribir con esto una póliza ya confirmada por el CSV oficial.
+    """
+    if not id_poliza_eiac or "-" not in id_poliza_eiac:
+        return NumeroPolizaExtraido(id_poliza_eiac, None, False, "IdPoliza sin guión: formato inesperado.")
+    numero = id_poliza_eiac.rsplit("-", 1)[-1].strip()
+    if not numero.isdigit() or not (_LONGITUD_MIN_NUMERO_POLIZA <= len(numero) <= _LONGITUD_MAX_NUMERO_POLIZA):
+        return NumeroPolizaExtraido(
+            id_poliza_eiac,
+            numero or None,
+            False,
+            f"'{numero}' no es puramente numérico de {_LONGITUD_MIN_NUMERO_POLIZA}-"
+            f"{_LONGITUD_MAX_NUMERO_POLIZA} dígitos — revisar manualmente.",
+        )
+    return NumeroPolizaExtraido(id_poliza_eiac, numero, True)
 
 
 def _pista_forma_pago(clase_forma_pago: str | None) -> str | None:

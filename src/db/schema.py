@@ -44,6 +44,13 @@ CREATE TABLE IF NOT EXISTS polizas (
     delegacion TEXT,
     nombre_tomador TEXT,
     fecha_import TEXT DEFAULT CURRENT_TIMESTAMP,
+    -- 'ASISA_CSV' (por defecto) o 'EIAC': una fila 'EIAC' es PROVISIONAL,
+    -- creada solo porque todavía no había llegado el CSV oficial de esa
+    -- póliza — ver engine.eiac_integracion. `cargar_polizas` (CSV oficial)
+    -- siempre pone origen='ASISA_CSV' al upsertar, incluso si ya existía
+    -- como provisional, para que el CSV oficial "confirme" la fila.
+    origen TEXT DEFAULT 'ASISA_CSV',
+    nota_origen TEXT,
     UNIQUE(poliza)
 );
 
@@ -151,6 +158,21 @@ def conectar(db_path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+def _asegurar_columna(conn: sqlite3.Connection, tabla: str, columna: str, definicion: str) -> None:
+    """Añade `columna` a `tabla` si no existe todavía.
+
+    `CREATE TABLE IF NOT EXISTS` no modifica una tabla ya existente en una
+    BD antigua (p.ej. `data/asisa.db` de antes de que existieran
+    `origen`/`nota_origen`) — hace falta un ALTER TABLE explícito para que
+    las bases de datos ya creadas se pongan al día.
+    """
+    columnas_actuales = {fila[1] for fila in conn.execute(f"PRAGMA table_info({tabla})")}
+    if columna not in columnas_actuales:
+        conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {definicion}")
+
+
 def inicializar_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
+    _asegurar_columna(conn, "polizas", "origen", "TEXT DEFAULT 'ASISA_CSV'")
+    _asegurar_columna(conn, "polizas", "nota_origen", "TEXT")
     conn.commit()

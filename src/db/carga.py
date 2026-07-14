@@ -41,7 +41,13 @@ def cargar_facturacion(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
 
 
 def cargar_polizas(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
-    """Upsert por póliza: siempre nos quedamos con el dato más reciente conocido."""
+    """Upsert por póliza: siempre nos quedamos con el dato más reciente conocido.
+
+    Pone `origen='ASISA_CSV'` y limpia `nota_origen` siempre, incluso si la
+    póliza ya existía como fila PROVISIONAL de EIAC (ver
+    `cargar_polizas_provisionales_eiac`) — el CSV oficial de ASISA siempre
+    "confirma" y sustituye a lo provisional.
+    """
     filas_insertadas = 0
     cur = conn.cursor()
     for _, r in df.iterrows():
@@ -50,8 +56,8 @@ def cargar_polizas(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
             INSERT INTO polizas
                 (poliza, cliente_codigo, razon_social, producto_base, producto_codigo,
                  fecha_emision, fecha_efecto, fecha_baja, forma_pago, situacion,
-                 provincia_tomador, delegacion, nombre_tomador)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 provincia_tomador, delegacion, nombre_tomador, origen, nota_origen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ASISA_CSV', NULL)
             ON CONFLICT(poliza) DO UPDATE SET
                 razon_social=excluded.razon_social,
                 producto_base=excluded.producto_base,
@@ -63,7 +69,9 @@ def cargar_polizas(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
                 situacion=excluded.situacion,
                 provincia_tomador=excluded.provincia_tomador,
                 delegacion=excluded.delegacion,
-                nombre_tomador=excluded.nombre_tomador
+                nombre_tomador=excluded.nombre_tomador,
+                origen='ASISA_CSV',
+                nota_origen=NULL
             """,
             (
                 r["poliza"], r["cliente_codigo"], r["razon_social"], r["producto_base"],
@@ -74,6 +82,36 @@ def cargar_polizas(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
             ),
         )
         filas_insertadas += 1
+    conn.commit()
+    return filas_insertadas
+
+
+def cargar_polizas_provisionales_eiac(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
+    """Inserta pólizas PROVISIONALES (origen='EIAC') solo si el número de
+    póliza no existe todavía — a propósito con INSERT OR IGNORE, nunca
+    sobreescribe una fila ya presente (oficial o provisional). Ver
+    `engine.eiac_integracion.construir_polizas_provisionales_desde_eiac`.
+    """
+    filas_insertadas = 0
+    cur = conn.cursor()
+    for _, r in df.iterrows():
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO polizas
+                (poliza, cliente_codigo, razon_social, producto_base, producto_codigo,
+                 fecha_emision, fecha_efecto, fecha_baja, forma_pago, situacion,
+                 provincia_tomador, delegacion, nombre_tomador, origen, nota_origen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                r["poliza"], r["cliente_codigo"], r["razon_social"], r["producto_base"],
+                r["producto_codigo"], _fecha_a_texto(r["fecha_emision"]),
+                _fecha_a_texto(r["fecha_efecto"]), _fecha_a_texto(r["fecha_baja"]),
+                r["forma_pago"], r["situacion"], r["provincia_tomador"],
+                r["delegacion"], r["nombre_tomador"], r["origen"], r["nota_origen"],
+            ),
+        )
+        filas_insertadas += cur.rowcount
     conn.commit()
     return filas_insertadas
 
