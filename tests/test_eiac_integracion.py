@@ -4,12 +4,13 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from engine.config_contrato import cargar_contrato
 from engine.eiac_integracion import (
     construir_facturacion_desde_eiac,
     construir_polizas_provisionales_desde_eiac,
     integrar_eiac,
 )
-from engine.insights import primeras_altas_por_periodo
+from engine.insights import primeras_altas_por_periodo, resumen_produccion_periodo
 from ingestion.eiac_xml import (
     NumeroPolizaExtraido,
     extraer_numero_poliza_asisa,
@@ -18,6 +19,12 @@ from ingestion.eiac_xml import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
+CONFIG_PATH = Path(__file__).parent.parent / "config" / "contrato.yaml"
+
+
+@pytest.fixture
+def contrato():
+    return cargar_contrato(CONFIG_PATH)
 
 
 # --- extraer_numero_poliza_asisa --------------------------------------------
@@ -199,17 +206,32 @@ def test_integrar_eiac_extremo_a_extremo_con_fixtures():
     assert resultado.no_reconocidos == []
 
 
-@pytest.mark.skip(
-    reason=(
-        "PENDIENTE: falta el dato real (IdPoliza completo, PrimaTotal/PrimaNeta, "
-        "FechaEfectoInicial, ClaseFormaPago, intentos CO/PE) de las 5 pólizas "
-        "reales cruzadas a mano por Sebastián (64276918, 64254004, 64254007, "
-        "64261922, 64201679/64174100) para construir el fixture EIAC real y "
-        "comprobar que la producción de julio calculada por integrar_eiac() + "
-        "resumen_produccion_periodo() coincide con los 6.366,60€ verificados a "
-        "mano. NO se ha inventado ese dato — cuando esté disponible, sustituir "
-        "este test por uno con los valores reales (ver conversación)."
+def test_produccion_julio_coincide_con_calculo_manual_de_los_5_casos_reales(contrato):
+    # 5 casos reales cruzados a mano por Sebastián (conversación):
+    #   1) 24300-64174100: 89.70 CC, efecto 30/06/2026  -> mensual, ciclo 16-15 -> julio
+    #   2) 24300-64201679: 126.00 CC, efecto 30/06/2026 -> mensual, ciclo 16-15 -> julio
+    #   3) 24300-64226440: 148.20 CC, efecto 01/07/2026 -> mensual -> julio
+    #   4) 24300-64261922: 49.20 CC, efecto 07/07/2026  -> mensual -> julio (Cristina Romero Alpuente)
+    #   5) 24848-64276918: 1409.40 TA, efecto 01/07/2026 -> prepago anual -> julio (Residents)
+    # Cálculo manual verificado: 1076.40 + 1512.00 + 1778.40 + 590.40 + 1409.40 = 6366.60€
+    df_recibos = parsear_eiac_recibos(FIXTURES / "eiac_recibos_julio_real.xml")
+    df_polizas_eiac = parsear_eiac_polizas(FIXTURES / "eiac_polizas_julio_real.xml")
+
+    resultado = integrar_eiac(df_polizas_eiac, df_recibos, pd.DataFrame())
+    assert resultado.no_reconocidos == []
+    assert set(resultado.polizas_provisionales["poliza"]) == {
+        "64174100", "64201679", "64226440", "64261922", "64276918",
+    }
+
+    # Las 2 pólizas con efecto 30/06 deben caer en julio (ciclo 16->15), no en junio.
+    periodos_por_poliza = dict(
+        zip(resultado.facturacion_eiac["poliza"], resultado.facturacion_eiac["periodo_liquidacion"])
     )
-)
-def test_produccion_julio_coincide_con_calculo_manual_de_los_5_casos_reales():
-    pass
+    assert periodos_por_poliza["64174100"] == "2026-07"
+    assert periodos_por_poliza["64201679"] == "2026-07"
+
+    resumen_julio = resumen_produccion_periodo(
+        resultado.polizas_provisionales, resultado.facturacion_eiac, contrato, "2026-07"
+    )
+    assert resumen_julio.polizas_detectadas == 5
+    assert resumen_julio.produccion_salud == pytest.approx(6366.60, abs=0.01)

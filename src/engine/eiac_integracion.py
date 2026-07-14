@@ -16,14 +16,21 @@ Con esa correspondencia, este módulo:
      solo para números de póliza que todavía no existen en la tabla
      oficial — nunca sobreescribe una póliza ya confirmada por el CSV.
 
-APROXIMACIÓN documentada (no confirmada, a diferencia del mapeo de
-número de póliza): EIAC no trae el ciclo real de "periodo_liquidacion"
-(16→15) que sí calcula ASISA en Facturación/Liquidación — aquí se usa el
-mes calendario de `FechaEfectoInicial` como mejor aproximación
-disponible. Cuando llegue el CSV de Facturación oficial de ese mes, su
-periodo_liquidacion (el correcto, calculado por ASISA) debe prevalecer;
-esto NO se resuelve automáticamente en este módulo — ver el aviso de
-duplicados potenciales más abajo.
+RECONSTRUCCIÓN del ciclo 16→15 (confianza alta, no un dato directo de
+EIAC): EIAC no trae la columna `periodo_liquidacion` que sí calcula
+ASISA en Facturación/Liquidación, así que `construir_facturacion_desde_eiac`
+la reconstruye aplicando la misma regla que ya documenta
+`engine.insights.primeras_altas_por_periodo` (ventana de devengo
+16-mes_M → 15-mes_M+1, perteneciente al periodo M+1) — confirmada con un
+caso real de esa misma fuente (fecha_efecto 30/06/2026 → periodo
+"2026-07"). Verificada de nuevo aquí con los 5 casos reales de julio de
+Sebastián: dos de ellos (64174100, 64201679) tienen FechaEfectoInicial
+30/06/2026 y SÍ caen en el periodo "2026-07" con esta regla, cuadrando
+con la producción real verificada a mano (6.366,60€) — ver
+`tests/test_eiac_integracion.py`. Sigue sin ser un dato confirmado
+directamente por ASISA para el canal EIAC (podría haber un caso futuro
+que la contradiga); cuando llegue el CSV de Facturación oficial de ese
+mes, su periodo_liquidacion real debe prevalecer sobre esta reconstrucción.
 
 AVISO sobre renumeración: el caso real 64201679/64174100 indica que, al
 menos una vez, el número extraído de `IdPoliza` no coincidió 1:1 con el
@@ -43,7 +50,12 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+from engine.insights import siguiente_periodo
 from ingestion.eiac_xml import NumeroPolizaExtraido, extraer_numero_poliza_asisa
+
+# Día que marca el corte del ciclo real de ASISA: [16 de mes_M, 15 de
+# mes_M+1] pertenece al periodo mes_M+1. Ver docstring del módulo.
+_DIA_CORTE_CICLO = 16
 
 # ClaseFormaPago -> forma_pago provisional. PISTA, no un hecho confirmado
 # (ver `ingestion.eiac_xml._pista_forma_pago`) — se usa solo como valor de
@@ -98,6 +110,16 @@ def _extraer_y_registrar(id_poliza_eiac: str, no_reconocidos: list[NumeroPolizaE
     return resultado.numero_poliza
 
 
+def _periodo_liquidacion_ciclo_16_15(fecha) -> str:
+    """Reconstruye el periodo_liquidacion real de ASISA (ciclo 16→15) a
+    partir de una fecha de efecto — ver docstring del módulo para la
+    justificación y el caso real que la confirma."""
+    mes_calendario = f"{fecha.year:04d}-{fecha.month:02d}"
+    if fecha.day >= _DIA_CORTE_CICLO:
+        return siguiente_periodo(mes_calendario)
+    return mes_calendario
+
+
 def construir_facturacion_desde_eiac(
     df_eiac_recibos: pd.DataFrame,
 ) -> tuple[pd.DataFrame, list[NumeroPolizaExtraido]]:
@@ -138,7 +160,7 @@ def construir_facturacion_desde_eiac(
                 "fecha_hasta": None,
                 "prima_neta": prima_neta,
                 "prima_total": r["prima_total"],
-                "periodo_liquidacion": f"{fecha_efecto.year:04d}-{fecha_efecto.month:02d}",
+                "periodo_liquidacion": _periodo_liquidacion_ciclo_16_15(fecha_efecto),
                 "duracion_recibo_meses": None,
             }
         )

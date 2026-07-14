@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="ISO-8859-15"?>
+<!-- 5 casos reales cruzados a mano por Sebastián (conversación), usados
+     para verificar que la producción de julio 2026 calculada por
+     engine.eiac_integracion coincide con el cálculo manual: 6.366,60€. -->
+<EIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC">
+  <Recibos>
+    <!-- Poliza 1: 89.70 * 12 = 1.076,40 -->
+    <Recibo>
+      <IdPoliza>24300-64174100</IdPoliza>
+      <PrimaTotal>89.85</PrimaTotal>
+      <PrimaNeta>89.70</PrimaNeta>
+      <SituacionRecibo>CO</SituacionRecibo>
+      <FechaEfectoInicial>2026-06-30</FechaEfectoInicial>
+      <ClaseFormaPago>CC</ClaseFormaPago>
+    </Recibo>
+    <!-- Poliza 2: 126.00 * 12 = 1.512,00 -->
+    <Recibo>
+      <IdPoliza>24300-64201679</IdPoliza>
+      <PrimaTotal>126.24</PrimaTotal>
+      <PrimaNeta>126.00</PrimaNeta>
+      <SituacionRecibo>CO</SituacionRecibo>
+      <FechaEfectoInicial>2026-06-30</FechaEfectoInicial>
+      <ClaseFormaPago>CC</ClaseFormaPago>
+    </Recibo>
+    <!-- Poliza 3: 148.20 * 12 = 1.778,40 -->
+    <Recibo>
+      <IdPoliza>24300-64226440</IdPoliza>
+      <PrimaTotal>148.48</PrimaTotal>
+      <PrimaNeta>148.20</PrimaNeta>
+      <SituacionRecibo>CO</SituacionRecibo>
+      <FechaEfectoInicial>2026-07-01</FechaEfectoInicial>
+      <ClaseFormaPago>CC</ClaseFormaPago>
+    </Recibo>
+    <!-- Poliza 4: 49.20 * 12 = 590,40 (Cristina Romero Alpuente) -->
+    <Recibo>
+      <IdPoliza>24300-64261922</IdPoliza>
+      <PrimaTotal>49.29</PrimaTotal>
+      <PrimaNeta>49.20</PrimaNeta>
+      <SituacionRecibo>CO</SituacionRecibo>
+      <FechaEfectoInicial>2026-07-07</FechaEfectoInicial>
+      <ClaseFormaPago>CC</ClaseFormaPago>
+    </Recibo>
+    <!-- Poliza 5: prepago anual, tal cual = 1.409,40 (Residents, Maria Eliana Valdes Manriquez) -->
+    <Recibo>
+      <IdPoliza>24848-64276918</IdPoliza>
+      <PrimaTotal>1411.90</PrimaTotal>
+      <PrimaNeta>1409.40</PrimaNeta>
+      <SituacionRecibo>CO</SituacionRecibo>
+      <FechaEfectoInicial>2026-07-01</FechaEfectoInicial>
+      <ClaseFormaPago>TA</ClaseFormaPago>
+    </Recibo>
+  </Recibos>
+</EIAC>
