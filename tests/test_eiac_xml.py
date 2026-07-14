@@ -7,6 +7,7 @@ import pytest
 from ingestion.eiac_xml import (
     detectar_tipo_eiac,
     parsear_eiac_polizas,
+    parsear_eiac_polizas_riesgos,
     parsear_eiac_recibos,
 )
 
@@ -20,8 +21,8 @@ def test_parsear_eiac_polizas_basico():
     fila = df[df["id_poliza"] == "0001234-9876541"].iloc[0]
     assert fila["cliente_codigo"] == "0001234"
     assert fila["numero_poliza"] == "9876541"
-    assert fila["situacion_poliza"] == "EF"
-    assert fila["clase_poliza"] == "SALUD"
+    assert fila["situacion_poliza"] == "EV"
+    assert fila["clase_poliza"] == "NP"
     assert fila["fecha_efecto_inicial"] == date(2026, 6, 1)
     assert fila["fecha_emision"] == date(2026, 5, 20)
     assert fila["descripcion_riesgo"] == "JUAN PEREZ GARCIA"
@@ -37,6 +38,14 @@ def test_parsear_eiac_polizas_fecha_efecto_futura_no_se_filtra():
     assert fila["fecha_emision"] == date(2026, 7, 1)
 
 
+def test_parsear_eiac_polizas_usa_riesgo_numero_orden_1_como_principal():
+    # Poliza familiar con 2 asegurados: descripcion_riesgo debe ser el de
+    # NumeroOrden=1, no "el primero que aparezca en el XML" a ciegas.
+    df = parsear_eiac_polizas(FIXTURES / "eiac_polizas_sample.xml")
+    fila = df[df["id_poliza"] == "0001234-9876542"].iloc[0]
+    assert fila["descripcion_riesgo"] == "MARIA LOPEZ SANCHEZ"
+
+
 def test_parsear_eiac_polizas_situacion_baja_tambien_se_incluye():
     df = parsear_eiac_polizas(FIXTURES / "eiac_polizas_sample.xml")
     fila = df[df["id_poliza"] == "0001234-9876543"].iloc[0]
@@ -47,26 +56,51 @@ def test_parsear_eiac_polizas_fichero_sin_registros_lanza_error(tmp_path):
     vacio = tmp_path / "vacio.xml"
     vacio.write_text(
         '<?xml version="1.0" encoding="ISO-8859-15"?>'
-        '<EIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC"><Polizas/></EIAC>'
+        '<ProcesosEIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC"><Objetos/></ProcesosEIAC>'
     )
     with pytest.raises(ValueError, match="EIAC-ENV-POLI"):
         parsear_eiac_polizas(vacio)
 
 
-def test_parsear_eiac_recibos_deduplica_co_sobre_pe():
+def test_parsear_eiac_polizas_riesgos_incluye_todos_los_asegurados():
+    df = parsear_eiac_polizas_riesgos(FIXTURES / "eiac_polizas_sample.xml")
+    riesgos_9876542 = df[df["id_poliza"] == "0001234-9876542"]
+    assert len(riesgos_9876542) == 2
+    assert set(riesgos_9876542["descripcion_riesgo"]) == {
+        "MARIA LOPEZ SANCHEZ", "PABLO LOPEZ SANCHEZ",
+    }
+    assert set(riesgos_9876542["numero_orden"]) == {"1", "2"}
+
+
+def test_parsear_eiac_polizas_riesgos_poliza_de_un_solo_asegurado():
+    df = parsear_eiac_polizas_riesgos(FIXTURES / "eiac_polizas_sample.xml")
+    riesgos_9876541 = df[df["id_poliza"] == "0001234-9876541"]
+    assert len(riesgos_9876541) == 1
+    assert riesgos_9876541.iloc[0]["descripcion_riesgo"] == "JUAN PEREZ GARCIA"
+
+
+def test_parsear_eiac_recibos_deduplica_co_sobre_pe_por_fecha_efecto():
+    # Clave de deduplicación: (id_poliza, fecha_efecto_inicial), NO el
+    # importe -- en datos reales el importe fluctúa unos céntimos entre
+    # intentos del mismo recibo (ver docstring del módulo).
     df = parsear_eiac_recibos(FIXTURES / "eiac_recibos_sample.xml")
 
-    recibos_360 = df[(df["id_poliza"] == "0001234-9876541") & (df["prima_total"] == 360.0)]
-    assert len(recibos_360) == 1
-    assert recibos_360.iloc[0]["situacion_recibo"] == "CO"
+    recibos_junio = df[
+        (df["id_poliza"] == "0001234-9876541") & (df["fecha_efecto_inicial"] == date(2026, 6, 1))
+    ]
+    assert len(recibos_junio) == 1
+    assert recibos_junio.iloc[0]["situacion_recibo"] == "CO"
+    # El importe que queda es el del intento CO (360.50), no el del PE
+    # descartado (360.00) -- aunque no coincidan, gana el CO.
+    assert recibos_junio.iloc[0]["prima_total"] == 360.50
 
 
-def test_parsear_eiac_recibos_no_colapsa_importes_distintos_de_la_misma_poliza():
+def test_parsear_eiac_recibos_no_colapsa_fechas_efecto_distintas_de_la_misma_poliza():
     df = parsear_eiac_recibos(FIXTURES / "eiac_recibos_sample.xml")
     recibos_poliza = df[df["id_poliza"] == "0001234-9876541"]
-    # 360.00 (deduplicado a 1 fila) + 30.00 (recibo mensual distinto) = 2 filas.
+    # Junio (deduplicado a 1 fila) + julio (recibo de otro mes) = 2 filas.
     assert len(recibos_poliza) == 2
-    assert set(recibos_poliza["prima_total"]) == {360.0, 30.0}
+    assert set(recibos_poliza["fecha_efecto_inicial"]) == {date(2026, 6, 1), date(2026, 7, 1)}
 
 
 def test_parsear_eiac_recibos_pendiente_sin_confirmar_se_mantiene_pe():
@@ -88,7 +122,7 @@ def test_parsear_eiac_recibos_fichero_sin_registros_lanza_error(tmp_path):
     vacio = tmp_path / "vacio.xml"
     vacio.write_text(
         '<?xml version="1.0" encoding="ISO-8859-15"?>'
-        '<EIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC"><Recibos/></EIAC>'
+        '<ProcesosEIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC"><Objetos/></ProcesosEIAC>'
     )
     with pytest.raises(ValueError, match="EIAC-ENV-RECI"):
         parsear_eiac_recibos(vacio)
@@ -96,14 +130,13 @@ def test_parsear_eiac_recibos_fichero_sin_registros_lanza_error(tmp_path):
 
 def test_deduplicar_recibos_prioridad_no_depende_del_orden():
     # Aunque el CO viniera ANTES del PE en el fichero, el resultado debe ser
-    # el mismo: CO gana siempre sobre PE para el mismo poliza+importe.
-    import pandas as pd
+    # el mismo: CO gana siempre sobre PE para el mismo poliza+fecha_efecto.
     from ingestion.eiac_xml import _deduplicar_recibos
 
     df = pd.DataFrame(
         [
-            {"id_poliza": "X", "prima_total": 100.0, "situacion_recibo": "CO"},
-            {"id_poliza": "X", "prima_total": 100.0, "situacion_recibo": "PE"},
+            {"id_poliza": "X", "fecha_efecto_inicial": date(2026, 1, 1), "situacion_recibo": "CO"},
+            {"id_poliza": "X", "fecha_efecto_inicial": date(2026, 1, 1), "situacion_recibo": "PE"},
         ]
     )
     resultado = _deduplicar_recibos(df)

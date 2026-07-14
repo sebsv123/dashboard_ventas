@@ -172,16 +172,34 @@ def cargar_eiac_polizas(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
 
 
 def cargar_eiac_recibos(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
-    """Los recibos ya llegan deduplicados (CO > PE) desde `ingestion.eiac_xml`."""
-    filas_insertadas = 0
+    """Los recibos ya llegan deduplicados (CO > PE) DENTRO de un mismo
+    fichero desde `ingestion.eiac_xml`, pero Sebastián sube ficheros EIAC
+    en lotes separados a lo largo del tiempo (confirmado: los 8 ficheros
+    reales tienen timestamps de hasta una semana de diferencia) — así que
+    aquí hace falta la MISMA prioridad CO > PE también ENTRE lotes: un
+    recibo que llegó "PE" en un fichero de hace 3 días y ahora aparece
+    "CO" en el fichero de hoy debe actualizarse; pero un recibo que ya
+    está "CO" nunca debe degradarse a "PE" por un reintento tardío de un
+    fichero posterior (la cláusula WHERE del UPSERT es la que lo impide).
+    """
+    filas_actualizadas = 0
     cur = conn.cursor()
     for _, r in df.iterrows():
         cur.execute(
             """
-            INSERT OR IGNORE INTO eiac_recibos
+            INSERT INTO eiac_recibos
                 (id_poliza, prima_total, prima_neta, situacion_recibo,
                  fecha_efecto_inicial, clase_forma_pago, pista_forma_pago)
             VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id_poliza, fecha_efecto_inicial) DO UPDATE SET
+                prima_total=excluded.prima_total,
+                prima_neta=excluded.prima_neta,
+                situacion_recibo=excluded.situacion_recibo,
+                clase_forma_pago=excluded.clase_forma_pago,
+                pista_forma_pago=excluded.pista_forma_pago
+            WHERE
+                (CASE situacion_recibo WHEN 'CO' THEN 1 WHEN 'PE' THEN 0 ELSE -1 END)
+                <= (CASE excluded.situacion_recibo WHEN 'CO' THEN 1 WHEN 'PE' THEN 0 ELSE -1 END)
             """,
             (
                 r["id_poliza"], r["prima_total"], r["prima_neta"], r["situacion_recibo"],
@@ -189,7 +207,34 @@ def cargar_eiac_recibos(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
                 r["pista_forma_pago"],
             ),
         )
-        filas_insertadas += cur.rowcount
+        filas_actualizadas += cur.rowcount
+    conn.commit()
+    return filas_actualizadas
+
+
+def cargar_eiac_polizas_riesgos(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
+    """Upsert por (id_poliza, numero_orden) — mismo criterio "última versión
+    conocida gana" que `cargar_eiac_polizas`. Ver
+    `ingestion.eiac_xml.parsear_eiac_polizas_riesgos`."""
+    filas_insertadas = 0
+    cur = conn.cursor()
+    for _, r in df.iterrows():
+        cur.execute(
+            """
+            INSERT INTO eiac_polizas_riesgos
+                (id_poliza, numero_orden, descripcion_riesgo, fecha_inicio, id_riesgo_eiac)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id_poliza, numero_orden) DO UPDATE SET
+                descripcion_riesgo=excluded.descripcion_riesgo,
+                fecha_inicio=excluded.fecha_inicio,
+                id_riesgo_eiac=excluded.id_riesgo_eiac
+            """,
+            (
+                r["id_poliza"], r["numero_orden"], r["descripcion_riesgo"],
+                _fecha_a_texto(r["fecha_inicio"]), r["id_riesgo_eiac"],
+            ),
+        )
+        filas_insertadas += 1
     conn.commit()
     return filas_insertadas
 

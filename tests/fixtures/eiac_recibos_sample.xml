@@ -1,42 +1,103 @@
 <?xml version="1.0" encoding="ISO-8859-15"?>
-<EIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC">
-  <Recibos>
-    <!-- Poliza 0001234-9876541: mismo recibo (360.00) intentado dos veces,
-         primero PE y luego CO -> debe quedar una sola fila, CO. -->
+<!-- Estructura confirmada contra 8 ficheros EIAC reales  -  solo los
+     elementos que el parser lee, sin bloques de datos personales. -->
+<ProcesosEIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC">
+  <Objetos>
+    <!-- Poliza 0001234-9876541: mismo recibo (misma fecha de efecto)
+         intentado dos veces. El importe fluctúa unos céntimos entre
+         intentos (visto en datos reales: 64201679, 64226440, 64261922)  - 
+         la deduplicación es por (id_poliza, fecha_efecto_inicial), NO por
+         importe, así que debe quedar una sola fila: la de CO. -->
     <Recibo>
-      <IdPoliza>0001234-9876541</IdPoliza>
-      <PrimaTotal>360.00</PrimaTotal>
-      <PrimaNeta>300.00</PrimaNeta>
-      <SituacionRecibo>PE</SituacionRecibo>
-      <FechaEfectoInicial>2026-06-01</FechaEfectoInicial>
-      <ClaseFormaPago>CC</ClaseFormaPago>
+      <DatosPoliza>
+        <IdPoliza>0001234-9876541</IdPoliza>
+      </DatosPoliza>
+      <DatosRecibo>
+        <SituacionRecibo>PE</SituacionRecibo>
+        <Fechas>
+          <FechaEfectoInicial>2026-06-01T00:00:00</FechaEfectoInicial>
+        </Fechas>
+        <GestionCobro>
+          <DatosFormaPago>
+            <ClaseFormaPago>CC</ClaseFormaPago>
+          </DatosFormaPago>
+        </GestionCobro>
+        <DatosImportes>
+          <Importes>
+            <PrimaTotal>360.00</PrimaTotal>
+            <PrimaNeta>300.00</PrimaNeta>
+          </Importes>
+        </DatosImportes>
+      </DatosRecibo>
     </Recibo>
     <Recibo>
-      <IdPoliza>0001234-9876541</IdPoliza>
-      <PrimaTotal>360.00</PrimaTotal>
-      <PrimaNeta>300.00</PrimaNeta>
-      <SituacionRecibo>CO</SituacionRecibo>
-      <FechaEfectoInicial>2026-06-01</FechaEfectoInicial>
-      <ClaseFormaPago>CC</ClaseFormaPago>
+      <DatosPoliza>
+        <IdPoliza>0001234-9876541</IdPoliza>
+      </DatosPoliza>
+      <DatosRecibo>
+        <SituacionRecibo>CO</SituacionRecibo>
+        <Fechas>
+          <FechaEfectoInicial>2026-06-01T00:00:00</FechaEfectoInicial>
+        </Fechas>
+        <GestionCobro>
+          <DatosFormaPago>
+            <ClaseFormaPago>CC</ClaseFormaPago>
+          </DatosFormaPago>
+        </GestionCobro>
+        <DatosImportes>
+          <Importes>
+            <PrimaTotal>360.50</PrimaTotal>
+            <PrimaNeta>300.00</PrimaNeta>
+          </Importes>
+        </DatosImportes>
+      </DatosRecibo>
     </Recibo>
-    <!-- Misma poliza, recibo mensual distinto (30.00) -> no debe colapsarse
-         con el anterior, es un importe diferente. -->
+    <!-- Misma poliza, recibo de OTRO mes (fecha de efecto distinta)  -  no
+         debe colapsarse con el anterior. -->
     <Recibo>
-      <IdPoliza>0001234-9876541</IdPoliza>
-      <PrimaTotal>30.00</PrimaTotal>
-      <PrimaNeta>25.00</PrimaNeta>
-      <SituacionRecibo>CO</SituacionRecibo>
-      <FechaEfectoInicial>2026-07-01</FechaEfectoInicial>
-      <ClaseFormaPago>CC</ClaseFormaPago>
+      <DatosPoliza>
+        <IdPoliza>0001234-9876541</IdPoliza>
+      </DatosPoliza>
+      <DatosRecibo>
+        <SituacionRecibo>CO</SituacionRecibo>
+        <Fechas>
+          <FechaEfectoInicial>2026-07-01T00:00:00</FechaEfectoInicial>
+        </Fechas>
+        <GestionCobro>
+          <DatosFormaPago>
+            <ClaseFormaPago>CC</ClaseFormaPago>
+          </DatosFormaPago>
+        </GestionCobro>
+        <DatosImportes>
+          <Importes>
+            <PrimaTotal>30.00</PrimaTotal>
+            <PrimaNeta>25.00</PrimaNeta>
+          </Importes>
+        </DatosImportes>
+      </DatosRecibo>
     </Recibo>
     <!-- Poliza 0001234-9876542: recibo aun sin confirmar (solo PE, nunca CO) -->
     <Recibo>
-      <IdPoliza>0001234-9876542</IdPoliza>
-      <PrimaTotal>300.00</PrimaTotal>
-      <PrimaNeta>250.00</PrimaNeta>
-      <SituacionRecibo>PE</SituacionRecibo>
-      <FechaEfectoInicial>2026-09-15</FechaEfectoInicial>
-      <ClaseFormaPago>TA</ClaseFormaPago>
+      <DatosPoliza>
+        <IdPoliza>0001234-9876542</IdPoliza>
+      </DatosPoliza>
+      <DatosRecibo>
+        <SituacionRecibo>PE</SituacionRecibo>
+        <Fechas>
+          <FechaEfectoInicial>2026-09-15T00:00:00</FechaEfectoInicial>
+        </Fechas>
+        <GestionCobro>
+          <DatosFormaPago>
+            <ClaseFormaPago>TA</ClaseFormaPago>
+          </DatosFormaPago>
+        </GestionCobro>
+        <DatosImportes>
+          <Importes>
+            <PrimaTotal>300.00</PrimaTotal>
+            <PrimaNeta>250.00</PrimaNeta>
+          </Importes>
+        </DatosImportes>
+      </DatosRecibo>
     </Recibo>
-  </Recibos>
-</EIAC>
+  </Objetos>
+</ProcesosEIAC>

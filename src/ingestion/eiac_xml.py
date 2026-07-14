@@ -8,14 +8,53 @@ Namespace: http://www.tirea.es/EIAC/ProcesosEIAC. Encoding real del
 fichero: ISO-8859-15 (distinto del latin-1 de los CSV de ASISA, aunque en
 la práctica solo difieren en símbolos como el €).
 
-NOTA sobre la estructura XML exacta: el nombre y anidamiento de los
-elementos de este parser está inferido de la lista de campos que dio
-Sebastián (IdPoliza, SituacionPoliza, ClasePoliza, FechaEfectoInicial,
-FechaEmision, DescripcionRiesgo para pólizas; IdPoliza, PrimaTotal,
-PrimaNeta, SituacionRecibo, FechaEfectoInicial, ClaseFormaPago para
-recibos), no de un fichero EIAC real todavía. Si el primer fichero real
-no encaja exactamente, hay que ajustar los XPath de `_iter_registros`,
-no la forma de los DataFrames de salida (esa parte sí está pactada).
+ESTRUCTURA XML — confirmada contra 8 ficheros reales de Sebastián (no ya
+una inferencia, como decía una versión anterior de este docstring). El
+elemento raíz es `<ProcesosEIAC>` (con el namespace de arriba), y los
+registros están en `<Objetos><Poliza>...</Poliza></Objetos>` /
+`<Objetos><Recibo>...</Recibo></Objetos>` — pero como `_iter_registros`
+busca por todos los descendientes (`root.iter(...)`), el anidamiento
+hasta llegar ahí es irrelevante. Lo que SÍ importa, y rompió en producción
+la primera vez (`_texto()` solo miraba hijos DIRECTOS), es dónde vive
+cada campo DENTRO de `<Poliza>`/`<Recibo>`:
+
+  <Poliza>
+    <SituacionPoliza>          (hijo directo)
+    <ClasePoliza>               (hijo directo — código de TRANSACCIÓN:
+                                 NP=nueva póliza, SU=suplemento, AN=anulación,
+                                 no el ramo/producto; ver aviso más abajo)
+    <DatosPoliza>
+      <IdPoliza>                (codigo_cliente-numero_poliza)
+    <Fechas>
+      <FechaEfectoInicial>      (con hora: "2026-07-01T00:00:00")
+      <FechaEmision>
+    <DatosRiesgos>
+      <Riesgo>                  (puede haber VARIOS — pólizas familiares)
+        <NumeroOrden>
+        <DescripcionRiesgo>
+
+  <Recibo>
+    <DatosPoliza>
+      <IdPoliza>
+    <DatosRecibo>
+      <SituacionRecibo>
+      <Fechas>
+        <FechaEfectoInicial>
+      <GestionCobro>
+        <DatosFormaPago>
+          <ClaseFormaPago>
+      <DatosImportes>
+        <Importes>
+          <PrimaTotal>
+          <PrimaNeta>
+
+AVISO sobre ClasePoliza: en los ficheros reales, `ClasePoliza` es un
+código de TRANSACCIÓN (NP/SU/AN/...), NO indica el ramo del producto
+(salud/vida) como se asumió al principio. La distinción salud/vida
+probablemente viene del NOMBRE del fichero ("EIAC-ENV-RECI-Asisa-..." vs
+"EIAC-ENV-RECI-Asisa Vida-...", confirmado con ficheros reales de ambos
+tipos) — pero eso todavía no se usa en ningún sitio de este módulo; lo
+dejamos documentado para la próxima vez que haga falta distinguir Vida.
 
 DECISIÓN DE DISEÑO — por qué se guarda en tablas propias, NO directamente
 en `polizas`/`facturacion`: `IdPoliza` aquí tiene el formato
@@ -32,18 +71,26 @@ eiac_integracion` usa esa correspondencia para cruzar `eiac_recibos`/
 `eiac_polizas` con `polizas`/`facturacion` sin mezclar las tablas brutas
 entre sí. Ver el docstring de ese módulo para el detalle.
 
-Duplicados en Recibos: los ficheros reales de ejemplo traen varias líneas
-para el mismo recibo (un "intento" de cobro por línea, incluida la
-resolución final) — antes de sumar nada, `parsear_eiac_recibos` se queda
-con una sola fila por póliza+importe, dando prioridad a SituacionRecibo
-"CO" (cobrado) sobre "PE" (pendiente) si ambas existen para el mismo
-recibo.
+Duplicados en Recibos: los ficheros reales traen varias líneas para el
+mismo recibo (un "intento" de cobro por línea, incluida la resolución
+final) — a veces DIEZ o más intentos antes del definitivo. IMPORTANTE:
+el importe (PrimaTotal) puede variar unos céntimos entre intentos del
+MISMO recibo (recálculos de recargos/DGS), así que la identidad de un
+recibo para deduplicar es (id_poliza, fecha_efecto_inicial), NO
+(id_poliza, prima_total) como se asumió al principio — usar el importe
+como parte de la clave dejaba intentos con centimos distintos como filas
+"distintas" en vez de colapsarlos, y el resultado dependía del orden de
+inserción (visto con datos reales: 64201679, 64226440, 64261922, todos
+con algún intento PE con un importe ligeramente distinto al CO final).
+`parsear_eiac_recibos` se queda con una sola fila por (id_poliza,
+fecha_efecto_inicial), dando prioridad a SituacionRecibo "CO" (cobrado)
+sobre "PE" (pendiente) si ambas existen para el mismo recibo.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -70,32 +117,53 @@ COLUMNAS_POLIZAS = [
     "clase_poliza", "fecha_efecto_inicial", "fecha_emision", "descripcion_riesgo",
 ]
 
+COLUMNAS_POLIZAS_RIESGOS = [
+    "id_poliza", "numero_orden", "descripcion_riesgo", "fecha_inicio", "id_riesgo_eiac",
+]
+
 COLUMNAS_RECIBOS = [
     "id_poliza", "prima_total", "prima_neta", "situacion_recibo",
     "fecha_efecto_inicial", "clase_forma_pago", "pista_forma_pago",
 ]
 
 
-def _texto(elemento: ET.Element, tag: str) -> str | None:
-    hijo = elemento.find(f"e:{tag}", _NS)
+def _elemento(elemento: ET.Element, ruta: str) -> ET.Element | None:
+    """Busca `ruta` ("A/B/C") como cadena de hijos directos, con el
+    namespace EIAC en cada segmento. A propósito NO es una búsqueda
+    recursiva (".//"): dos campos distintos pueden compartir nombre de
+    tag en profundidades distintas (p.ej. "FechaEfectoInicial" aparece
+    tanto en `<Poliza><Fechas>` como en `<Recibo><DatosRecibo><Fechas>`),
+    así que hace falta la ruta exacta para no coger el equivocado.
+    """
+    xpath = "/".join(f"e:{parte}" for parte in ruta.split("/"))
+    return elemento.find(xpath, _NS)
+
+
+def _texto(elemento: ET.Element, ruta: str) -> str | None:
+    hijo = _elemento(elemento, ruta)
     if hijo is None or hijo.text is None:
         return None
     texto = hijo.text.strip()
     return texto or None
 
 
-def _fecha(elemento: ET.Element, tag: str) -> date | None:
-    texto = _texto(elemento, tag)
+def _fecha(elemento: ET.Element, ruta: str) -> date | None:
+    texto = _texto(elemento, ruta)
     if not texto:
         return None
     try:
-        return date.fromisoformat(texto)
+        # Los ficheros reales traen fecha+hora ("2026-07-01T00:00:00"), no
+        # solo fecha -- date.fromisoformat() no acepta eso y fallaba en
+        # silencio (ValueError capturado más abajo) devolviendo None
+        # incluso con el XPath correcto. datetime.fromisoformat() acepta
+        # ambos formatos (con y sin hora).
+        return datetime.fromisoformat(texto).date()
     except ValueError:
         return None
 
 
-def _decimal(elemento: ET.Element, tag: str) -> float | None:
-    texto = _texto(elemento, tag)
+def _decimal(elemento: ET.Element, ruta: str) -> float | None:
+    texto = _texto(elemento, ruta)
     if not texto:
         return None
     try:
@@ -179,14 +247,32 @@ def _iter_registros(root: ET.Element, tag: str):
     return root.iter(f"{{{NS_EIAC}}}{tag}")
 
 
+def _riesgo_principal(poliza: ET.Element) -> str | None:
+    """DescripcionRiesgo del riesgo con NumeroOrden=1 (el "principal" de la
+    póliza) — puede haber varios `<Riesgo>` en una póliza familiar; el
+    resto se conserva en `parsear_eiac_polizas_riesgos`, no se pierde."""
+    riesgos = poliza.findall("e:DatosRiesgos/e:Riesgo", _NS)
+    for riesgo in riesgos:
+        if _texto(riesgo, "NumeroOrden") == "1":
+            return _texto(riesgo, "DescripcionRiesgo")
+    if riesgos:
+        return _texto(riesgos[0], "DescripcionRiesgo")
+    return None
+
+
 def parsear_eiac_polizas(path: str | Path) -> pd.DataFrame:
-    """Parsea un fichero "EIAC-ENV-POLI-*.xml" a un DataFrame, una fila por póliza."""
+    """Parsea un fichero "EIAC-ENV-POLI-*.xml" a un DataFrame, una fila por póliza.
+
+    `descripcion_riesgo` es solo el riesgo NumeroOrden=1 (el principal) —
+    usa `parsear_eiac_polizas_riesgos` para el resto de asegurados de
+    pólizas familiares.
+    """
     tree = ET.parse(path)
     root = tree.getroot()
 
     filas = []
     for poliza in _iter_registros(root, "Poliza"):
-        id_poliza = _texto(poliza, "IdPoliza")
+        id_poliza = _texto(poliza, "DatosPoliza/IdPoliza")
         cliente_codigo, numero_poliza = _partir_id_poliza(id_poliza)
         filas.append(
             {
@@ -195,9 +281,9 @@ def parsear_eiac_polizas(path: str | Path) -> pd.DataFrame:
                 "numero_poliza": numero_poliza,
                 "situacion_poliza": _texto(poliza, "SituacionPoliza"),
                 "clase_poliza": _texto(poliza, "ClasePoliza"),
-                "fecha_efecto_inicial": _fecha(poliza, "FechaEfectoInicial"),
-                "fecha_emision": _fecha(poliza, "FechaEmision"),
-                "descripcion_riesgo": _texto(poliza, "DescripcionRiesgo"),
+                "fecha_efecto_inicial": _fecha(poliza, "Fechas/FechaEfectoInicial"),
+                "fecha_emision": _fecha(poliza, "Fechas/FechaEmision"),
+                "descripcion_riesgo": _riesgo_principal(poliza),
             }
         )
 
@@ -209,16 +295,40 @@ def parsear_eiac_polizas(path: str | Path) -> pd.DataFrame:
     return pd.DataFrame(filas, columns=COLUMNAS_POLIZAS)
 
 
+def parsear_eiac_polizas_riesgos(path: str | Path) -> pd.DataFrame:
+    """Parsea TODOS los `<Riesgo>` de cada póliza (una fila por asegurado),
+    incluidas las pólizas familiares con más de uno — complemento de
+    `parsear_eiac_polizas`, que solo se queda con el NumeroOrden=1."""
+    tree = ET.parse(path)
+    root = tree.getroot()
+
+    filas = []
+    for poliza in _iter_registros(root, "Poliza"):
+        id_poliza = _texto(poliza, "DatosPoliza/IdPoliza")
+        for riesgo in poliza.findall("e:DatosRiesgos/e:Riesgo", _NS):
+            filas.append(
+                {
+                    "id_poliza": id_poliza,
+                    "numero_orden": _texto(riesgo, "NumeroOrden"),
+                    "descripcion_riesgo": _texto(riesgo, "DescripcionRiesgo"),
+                    "fecha_inicio": _fecha(riesgo, "FechaInicio"),
+                    "id_riesgo_eiac": _texto(riesgo, "IdRiesgo"),
+                }
+            )
+    return pd.DataFrame(filas, columns=COLUMNAS_POLIZAS_RIESGOS)
+
+
 def _deduplicar_recibos(df: pd.DataFrame) -> pd.DataFrame:
-    """Colapsa "intentos" repetidos del mismo recibo (misma póliza + mismo
-    importe) a una sola fila, dando prioridad a CO sobre PE — ver docstring
-    del módulo."""
+    """Colapsa "intentos" repetidos del mismo recibo (misma póliza + misma
+    fecha de efecto) a una sola fila, dando prioridad a CO sobre PE — ver
+    docstring del módulo (el importe NO forma parte de la identidad del
+    recibo: fluctúa unos céntimos entre intentos reales)."""
     if df.empty:
         return df
     df = df.copy()
     df["_prioridad"] = df["situacion_recibo"].map(_PRIORIDAD_SITUACION_RECIBO).fillna(-1)
     df = df.sort_values("_prioridad", kind="stable")
-    df = df.drop_duplicates(subset=["id_poliza", "prima_total"], keep="last")
+    df = df.drop_duplicates(subset=["id_poliza", "fecha_efecto_inicial"], keep="last")
     return df.drop(columns="_prioridad").sort_index().reset_index(drop=True)
 
 
@@ -230,14 +340,14 @@ def parsear_eiac_recibos(path: str | Path) -> pd.DataFrame:
 
     filas = []
     for recibo in _iter_registros(root, "Recibo"):
-        clase_forma_pago = _texto(recibo, "ClaseFormaPago")
+        clase_forma_pago = _texto(recibo, "DatosRecibo/GestionCobro/DatosFormaPago/ClaseFormaPago")
         filas.append(
             {
-                "id_poliza": _texto(recibo, "IdPoliza"),
-                "prima_total": _decimal(recibo, "PrimaTotal"),
-                "prima_neta": _decimal(recibo, "PrimaNeta"),
-                "situacion_recibo": _texto(recibo, "SituacionRecibo"),
-                "fecha_efecto_inicial": _fecha(recibo, "FechaEfectoInicial"),
+                "id_poliza": _texto(recibo, "DatosPoliza/IdPoliza"),
+                "prima_total": _decimal(recibo, "DatosRecibo/DatosImportes/Importes/PrimaTotal"),
+                "prima_neta": _decimal(recibo, "DatosRecibo/DatosImportes/Importes/PrimaNeta"),
+                "situacion_recibo": _texto(recibo, "DatosRecibo/SituacionRecibo"),
+                "fecha_efecto_inicial": _fecha(recibo, "DatosRecibo/Fechas/FechaEfectoInicial"),
                 "clase_forma_pago": clase_forma_pago,
                 "pista_forma_pago": _pista_forma_pago(clase_forma_pago),
             }

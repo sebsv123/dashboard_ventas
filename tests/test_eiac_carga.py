@@ -41,10 +41,13 @@ def test_cargar_eiac_polizas_inserta_y_es_idempotente(conn):
 def test_cargar_eiac_recibos_inserta_y_no_duplica(conn):
     df = parsear_eiac_recibos(FIXTURES / "eiac_recibos_sample.xml")
     n1 = cargar_eiac_recibos(conn, df)
-    assert n1 == 3  # 360.00 (deduplicado) + 30.00 + 300.00
+    assert n1 == 3  # junio (deduplicado) + julio + 9876542
 
+    # Reimportar el mismo fichero no crea filas nuevas -- el UPSERT
+    # actualiza in situ (mismos valores, misma prioridad CO/PE), pero el
+    # recuento de filas de la tabla no cambia.
     n2 = cargar_eiac_recibos(conn, df)
-    assert n2 == 0  # ya estaban, INSERT OR IGNORE no cuenta nada nuevo
+    assert n2 == 3  # 3 filas "tocadas" por el upsert, 0 filas nuevas
     total = pd.read_sql("SELECT COUNT(*) AS n FROM eiac_recibos", conn).iloc[0]["n"]
     assert total == 3
 
@@ -54,10 +57,44 @@ def test_cargar_eiac_recibos_guarda_situacion_co_no_pe(conn):
     cargar_eiac_recibos(conn, df)
 
     fila = pd.read_sql(
-        "SELECT * FROM eiac_recibos WHERE id_poliza = ? AND prima_total = ?",
-        conn, params=("0001234-9876541", 360.0),
+        "SELECT * FROM eiac_recibos WHERE id_poliza = ? AND fecha_efecto_inicial = ?",
+        conn, params=("0001234-9876541", "2026-06-01"),
     ).iloc[0]
     assert fila["situacion_recibo"] == "CO"
+    assert fila["prima_total"] == 360.50  # el importe del intento CO, no el del PE descartado
+
+
+def test_cargar_eiac_recibos_un_pe_tardio_no_degrada_un_co_ya_guardado(conn):
+    # Simula lo que pasa de verdad con los ficheros reales: se sube un
+    # lote con el CO ya confirmado, y días después llega OTRO lote con un
+    # reintento PE residual del mismo recibo (mismo id_poliza+fecha) --
+    # el CO ya guardado NO debe degradarse a PE.
+    co_ya_guardado = pd.DataFrame(
+        [
+            {
+                "id_poliza": "P1", "prima_total": 100.0, "prima_neta": 90.0,
+                "situacion_recibo": "CO", "fecha_efecto_inicial": pd.Timestamp("2026-06-01"),
+                "clase_forma_pago": "CC", "pista_forma_pago": "posible_mensual",
+            }
+        ]
+    )
+    cargar_eiac_recibos(conn, co_ya_guardado)
+
+    pe_tardio = pd.DataFrame(
+        [
+            {
+                "id_poliza": "P1", "prima_total": 999.0, "prima_neta": 900.0,
+                "situacion_recibo": "PE", "fecha_efecto_inicial": pd.Timestamp("2026-06-01"),
+                "clase_forma_pago": "CC", "pista_forma_pago": "posible_mensual",
+            }
+        ]
+    )
+    n = cargar_eiac_recibos(conn, pe_tardio)
+    assert n == 0  # bloqueado por la cláusula WHERE del upsert
+
+    fila = pd.read_sql("SELECT * FROM eiac_recibos WHERE id_poliza = ?", conn, params=("P1",)).iloc[0]
+    assert fila["situacion_recibo"] == "CO"
+    assert fila["prima_total"] == 100.0
 
 
 def test_cargar_polizas_provisionales_eiac_inserta_con_origen(conn):

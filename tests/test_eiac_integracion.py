@@ -69,10 +69,11 @@ def test_construir_facturacion_desde_eiac_forma_correcta():
 
     assert no_reconocidos == []
     assert set(facturacion_eiac["poliza"]) == {"9876541", "9876542"}
-    fila_360 = facturacion_eiac[facturacion_eiac["prima_total"] == 360.0].iloc[0]
-    assert fila_360["poliza"] == "9876541"
-    assert fila_360["periodo_liquidacion"] == "2026-06"  # mes calendario de FechaEfectoInicial
-    assert fila_360["prima_neta"] == 300.0
+    fila_junio = facturacion_eiac[
+        (facturacion_eiac["poliza"] == "9876541") & (facturacion_eiac["prima_total"] == 360.50)
+    ].iloc[0]
+    assert fila_junio["periodo_liquidacion"] == "2026-06"  # mes calendario de FechaEfectoInicial
+    assert fila_junio["prima_neta"] == 300.0
 
 
 def test_construir_facturacion_desde_eiac_registra_no_reconocidos():
@@ -159,11 +160,25 @@ def test_construir_polizas_provisionales_situacion_y_fecha_efecto_futura():
         df_polizas_eiac, pd.DataFrame(), pd.DataFrame()
     )
     fila = provisionales[provisionales["poliza"] == "9876542"].iloc[0]
-    assert fila["situacion"] == "A"  # EIAC "EF" -> ASISA "A"
+    assert fila["situacion"] == "A"  # EIAC "EV" (en vigor) -> ASISA "A"
     assert fila["fecha_efecto"] == date(2026, 9, 15)  # varios meses vista, no se filtra
 
     fila_baja = provisionales[provisionales["poliza"] == "9876543"].iloc[0]
     assert fila_baja["situacion"] == "B"  # EIAC "BJ" -> ASISA "B"
+
+
+def test_construir_polizas_provisionales_no_usa_clase_poliza_como_producto():
+    # ClasePoliza es un código de TRANSACCIÓN (NP/SU/AN), NO el ramo del
+    # producto (confirmado con 8 ficheros reales) -- producto_base y
+    # razon_social deben quedar sin confirmar, nunca inferidos de ahí.
+    df_polizas_eiac = parsear_eiac_polizas(FIXTURES / "eiac_polizas_sample.xml")
+    provisionales, _ = construir_polizas_provisionales_desde_eiac(
+        df_polizas_eiac, pd.DataFrame(), pd.DataFrame()
+    )
+    fila = provisionales[provisionales["poliza"] == "9876541"].iloc[0]
+    assert fila["producto_base"] is None
+    assert fila["razon_social"] is None
+    assert "EIAC no distingue Salud/Vida" in fila["nota_origen"]
 
 
 def test_construir_polizas_provisionales_vacio_no_revienta():
@@ -178,7 +193,7 @@ def test_construir_polizas_provisionales_vacio_no_revienta():
 
 def test_integrar_eiac_combina_no_reconocidos_de_ambas_fuentes():
     df_polizas_eiac = pd.DataFrame(
-        [{"id_poliza": "24848-BADPOLI", "situacion_poliza": "EF", "clase_poliza": "SALUD",
+        [{"id_poliza": "24848-BADPOLI", "situacion_poliza": "EV", "clase_poliza": "NP",
           "fecha_efecto_inicial": date(2026, 6, 1), "fecha_emision": date(2026, 5, 1),
           "descripcion_riesgo": "X", "cliente_codigo": "24848"}]
     )

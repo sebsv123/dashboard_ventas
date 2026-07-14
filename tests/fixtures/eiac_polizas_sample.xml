@@ -1,29 +1,74 @@
 <?xml version="1.0" encoding="ISO-8859-15"?>
-<EIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC">
-  <Polizas>
+<!-- Estructura confirmada contra 8 ficheros EIAC reales (ver conversación /
+     docstring de ingestion.eiac_xml)  -  solo se incluyen los elementos que
+     el parser realmente lee; se omiten a propósito los bloques de datos
+     personales (Persona/Titular/Domicilio/Contacto) que trae un fichero
+     real, ya que el parser no los usa y así no hace falta PII de prueba. -->
+<ProcesosEIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC">
+  <Objetos>
     <Poliza>
-      <IdPoliza>0001234-9876541</IdPoliza>
-      <SituacionPoliza>EF</SituacionPoliza>
-      <ClasePoliza>SALUD</ClasePoliza>
-      <FechaEfectoInicial>2026-06-01</FechaEfectoInicial>
-      <FechaEmision>2026-05-20</FechaEmision>
-      <DescripcionRiesgo>JUAN PEREZ GARCIA</DescripcionRiesgo>
+      <SituacionPoliza>EV</SituacionPoliza>
+      <ClasePoliza>NP</ClasePoliza>
+      <DatosPoliza>
+        <IdPoliza>0001234-9876541</IdPoliza>
+      </DatosPoliza>
+      <Fechas>
+        <FechaEfectoInicial>2026-06-01T00:00:00</FechaEfectoInicial>
+        <FechaEmision>2026-05-20T00:00:00</FechaEmision>
+      </Fechas>
+      <DatosRiesgos>
+        <Riesgo>
+          <NumeroOrden>1</NumeroOrden>
+          <DescripcionRiesgo>JUAN PEREZ GARCIA</DescripcionRiesgo>
+          <FechaInicio>2026-06-01T00:00:00</FechaInicio>
+          <IdRiesgo>1000001</IdRiesgo>
+        </Riesgo>
+      </DatosRiesgos>
+    </Poliza>
+    <!-- Poliza familiar con 2 asegurados, a varios meses vista (septiembre) -->
+    <Poliza>
+      <SituacionPoliza>EV</SituacionPoliza>
+      <ClasePoliza>NP</ClasePoliza>
+      <DatosPoliza>
+        <IdPoliza>0001234-9876542</IdPoliza>
+      </DatosPoliza>
+      <Fechas>
+        <FechaEfectoInicial>2026-09-15T00:00:00</FechaEfectoInicial>
+        <FechaEmision>2026-07-01T00:00:00</FechaEmision>
+      </Fechas>
+      <DatosRiesgos>
+        <Riesgo>
+          <NumeroOrden>1</NumeroOrden>
+          <DescripcionRiesgo>MARIA LOPEZ SANCHEZ</DescripcionRiesgo>
+          <FechaInicio>2026-09-15T00:00:00</FechaInicio>
+          <IdRiesgo>1000002</IdRiesgo>
+        </Riesgo>
+        <Riesgo>
+          <NumeroOrden>2</NumeroOrden>
+          <DescripcionRiesgo>PABLO LOPEZ SANCHEZ</DescripcionRiesgo>
+          <FechaInicio>2026-09-15T00:00:00</FechaInicio>
+          <IdRiesgo>1000003</IdRiesgo>
+        </Riesgo>
+      </DatosRiesgos>
     </Poliza>
     <Poliza>
-      <IdPoliza>0001234-9876542</IdPoliza>
-      <SituacionPoliza>EF</SituacionPoliza>
-      <ClasePoliza>SALUD</ClasePoliza>
-      <FechaEfectoInicial>2026-09-15</FechaEfectoInicial>
-      <FechaEmision>2026-07-01</FechaEmision>
-      <DescripcionRiesgo>MARIA LOPEZ SANCHEZ</DescripcionRiesgo>
-    </Poliza>
-    <Poliza>
-      <IdPoliza>0001234-9876543</IdPoliza>
       <SituacionPoliza>BJ</SituacionPoliza>
-      <ClasePoliza>SALUD</ClasePoliza>
-      <FechaEfectoInicial>2026-01-10</FechaEfectoInicial>
-      <FechaEmision>2025-12-28</FechaEmision>
-      <DescripcionRiesgo>ANTONIO RUIZ DIAZ</DescripcionRiesgo>
+      <ClasePoliza>AN</ClasePoliza>
+      <DatosPoliza>
+        <IdPoliza>0001234-9876543</IdPoliza>
+      </DatosPoliza>
+      <Fechas>
+        <FechaEfectoInicial>2026-01-10T00:00:00</FechaEfectoInicial>
+        <FechaEmision>2025-12-28T00:00:00</FechaEmision>
+      </Fechas>
+      <DatosRiesgos>
+        <Riesgo>
+          <NumeroOrden>1</NumeroOrden>
+          <DescripcionRiesgo>ANTONIO RUIZ DIAZ</DescripcionRiesgo>
+          <FechaInicio>2026-01-10T00:00:00</FechaInicio>
+          <IdRiesgo>1000004</IdRiesgo>
+        </Riesgo>
+      </DatosRiesgos>
     </Poliza>
-  </Polizas>
-</EIAC>
+  </Objetos>
+</ProcesosEIAC>

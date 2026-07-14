@@ -1,35 +1,76 @@
 <?xml version="1.0" encoding="ISO-8859-15"?>
-<!-- Lado POLI de los mismos 5 casos reales de eiac_recibos_julio_real.xml.
-     Sebastián solo dio datos del lado RECI (recibos) para estos 5 casos, no
-     del lado POLI, así que aquí SOLO se incluyen los campos reales o
-     directamente derivables (IdPoliza, FechaEfectoInicial, igual que en
-     el recibo real, y DescripcionRiesgo donde se dio el nombre). Se
-     omiten a propósito SituacionPoliza, ClasePoliza y FechaEmision en vez
-     de inventar un valor: el parser los deja en None y la producción no
-     depende de ellos. -->
-<EIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC">
-  <Polizas>
+<!-- Lado POLI de los mismos 5 casos reales de eiac_recibos_julio_real.xml,
+     con la estructura real confirmada (DatosPoliza/IdPoliza, Fechas/...,
+     DatosRiesgos/Riesgo/...). Sebastián solo dio datos completos del lado
+     RECI para estos 5 casos; SituacionPoliza="EV" y ClasePoliza="NP" sí
+     están confirmados como los valores reales que usa ASISA (vistos en
+     los 8 ficheros reales), así que no son una invención. DescripcionRiesgo
+     usa nombres ya compartidos en la conversación para 2 de los 5 (Cristina
+     Romero Alpuente; Residents/María Eliana Valdés Manríquez); para las
+     otras 3 no se dio nombre, así que se deja vacío en vez de inventarlo. -->
+<ProcesosEIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC">
+  <Objetos>
     <Poliza>
-      <IdPoliza>24300-64174100</IdPoliza>
-      <FechaEfectoInicial>2026-06-30</FechaEfectoInicial>
+      <SituacionPoliza>EV</SituacionPoliza>
+      <ClasePoliza>NP</ClasePoliza>
+      <DatosPoliza>
+        <IdPoliza>24300-64174100</IdPoliza>
+      </DatosPoliza>
+      <Fechas>
+        <FechaEfectoInicial>2026-06-30T00:00:00</FechaEfectoInicial>
+      </Fechas>
     </Poliza>
     <Poliza>
-      <IdPoliza>24300-64201679</IdPoliza>
-      <FechaEfectoInicial>2026-06-30</FechaEfectoInicial>
+      <SituacionPoliza>EV</SituacionPoliza>
+      <ClasePoliza>NP</ClasePoliza>
+      <DatosPoliza>
+        <IdPoliza>24300-64201679</IdPoliza>
+      </DatosPoliza>
+      <Fechas>
+        <FechaEfectoInicial>2026-06-30T00:00:00</FechaEfectoInicial>
+      </Fechas>
     </Poliza>
     <Poliza>
-      <IdPoliza>24300-64226440</IdPoliza>
-      <FechaEfectoInicial>2026-07-01</FechaEfectoInicial>
+      <SituacionPoliza>EV</SituacionPoliza>
+      <ClasePoliza>NP</ClasePoliza>
+      <DatosPoliza>
+        <IdPoliza>24300-64226440</IdPoliza>
+      </DatosPoliza>
+      <Fechas>
+        <FechaEfectoInicial>2026-07-01T00:00:00</FechaEfectoInicial>
+      </Fechas>
     </Poliza>
     <Poliza>
-      <IdPoliza>24300-64261922</IdPoliza>
-      <FechaEfectoInicial>2026-07-07</FechaEfectoInicial>
-      <DescripcionRiesgo>CRISTINA ROMERO ALPUENTE</DescripcionRiesgo>
+      <SituacionPoliza>EV</SituacionPoliza>
+      <ClasePoliza>NP</ClasePoliza>
+      <DatosPoliza>
+        <IdPoliza>24300-64261922</IdPoliza>
+      </DatosPoliza>
+      <Fechas>
+        <FechaEfectoInicial>2026-07-07T00:00:00</FechaEfectoInicial>
+      </Fechas>
+      <DatosRiesgos>
+        <Riesgo>
+          <NumeroOrden>1</NumeroOrden>
+          <DescripcionRiesgo>CRISTINA ROMERO ALPUENTE</DescripcionRiesgo>
+        </Riesgo>
+      </DatosRiesgos>
     </Poliza>
     <Poliza>
-      <IdPoliza>24848-64276918</IdPoliza>
-      <FechaEfectoInicial>2026-07-01</FechaEfectoInicial>
-      <DescripcionRiesgo>RESIDENTS - MARIA ELIANA VALDES MANRIQUEZ</DescripcionRiesgo>
+      <SituacionPoliza>EV</SituacionPoliza>
+      <ClasePoliza>NP</ClasePoliza>
+      <DatosPoliza>
+        <IdPoliza>24848-64276918</IdPoliza>
+      </DatosPoliza>
+      <Fechas>
+        <FechaEfectoInicial>2026-07-01T00:00:00</FechaEfectoInicial>
+      </Fechas>
+      <DatosRiesgos>
+        <Riesgo>
+          <NumeroOrden>1</NumeroOrden>
+          <DescripcionRiesgo>RESIDENTS - MARIA ELIANA VALDES MANRIQUEZ</DescripcionRiesgo>
+        </Riesgo>
+      </DatosRiesgos>
     </Poliza>
-  </Polizas>
-</EIAC>
+  </Objetos>
+</ProcesosEIAC>

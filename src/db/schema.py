@@ -142,7 +142,28 @@ CREATE TABLE IF NOT EXISTS eiac_recibos (
     fecha_efecto_inicial TEXT,
     clase_forma_pago TEXT,
     pista_forma_pago TEXT,           -- heurística, no un hecho confirmado
-    UNIQUE(id_poliza, prima_total, fecha_efecto_inicial)
+    -- UNIQUE por (id_poliza, fecha_efecto_inicial), NO por prima_total: en
+    -- los ficheros reales el importe fluctúa unos céntimos entre intentos
+    -- del MISMO recibo (recálculos de recargos), así que no es parte de
+    -- la identidad del recibo. db.carga.cargar_eiac_recibos hace upsert
+    -- respetando la prioridad CO > PE también entre ficheros subidos en
+    -- momentos distintos (un PE posterior nunca degrada un CO ya guardado).
+    UNIQUE(id_poliza, fecha_efecto_inicial)
+);
+
+-- Un asegurado por fila (una póliza familiar puede tener varios). El
+-- NumeroOrden=1 ya se guarda como `descripcion_riesgo` en `eiac_polizas`
+-- para lo que ya usa la UI; esta tabla es el detalle completo, para no
+-- perder al resto de asegurados. Ver `ingestion.eiac_xml.
+-- parsear_eiac_polizas_riesgos`.
+CREATE TABLE IF NOT EXISTS eiac_polizas_riesgos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_poliza TEXT NOT NULL,
+    numero_orden TEXT,
+    descripcion_riesgo TEXT,
+    fecha_inicio TEXT,
+    id_riesgo_eiac TEXT,
+    UNIQUE(id_poliza, numero_orden)
 );
 """
 
@@ -171,7 +192,29 @@ def _asegurar_columna(conn: sqlite3.Connection, tabla: str, columna: str, defini
         conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {definicion}")
 
 
+def _migrar_eiac_recibos_unique(conn: sqlite3.Connection) -> None:
+    """`eiac_recibos` cambió su UNIQUE de (id_poliza, prima_total,
+    fecha_efecto_inicial) a (id_poliza, fecha_efecto_inicial) — ver
+    comentario en `SCHEMA_SQL`. `CREATE TABLE IF NOT EXISTS` no toca una
+    tabla que ya existe con la restricción antigua, así que si la tabla
+    está vacía (no hay pérdida posible) se recrea; si ya tiene filas con
+    el esquema antiguo, se deja tal cual (caso no esperado en un proyecto
+    de un único usuario, pero mejor no borrar datos en silencio).
+    """
+    fila = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='eiac_recibos'"
+    ).fetchone()
+    if fila is None or fila[0] is None:
+        return
+    if "UNIQUE(id_poliza, fecha_efecto_inicial)" in fila[0]:
+        return
+    total = conn.execute("SELECT COUNT(*) FROM eiac_recibos").fetchone()[0]
+    if total == 0:
+        conn.execute("DROP TABLE eiac_recibos")
+
+
 def inicializar_schema(conn: sqlite3.Connection) -> None:
+    _migrar_eiac_recibos_unique(conn)
     conn.executescript(SCHEMA_SQL)
     _asegurar_columna(conn, "polizas", "origen", "TEXT DEFAULT 'ASISA_CSV'")
     _asegurar_columna(conn, "polizas", "nota_origen", "TEXT")

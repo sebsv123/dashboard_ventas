@@ -20,6 +20,7 @@ sys.path.insert(0, str(RAIZ / "src"))
 
 from db.carga import (
     cargar_eiac_polizas,
+    cargar_eiac_polizas_riesgos,
     cargar_eiac_recibos,
     cargar_facturacion,
     cargar_liquidacion,
@@ -51,7 +52,12 @@ from engine.insights import (
 from engine.proyeccion import proyectar_cierre_mes
 from engine.rappel import calcular_rappel_inicial
 from engine.reconciliacion import detectar_polizas_sin_cobrar
-from ingestion.eiac_xml import detectar_tipo_eiac, parsear_eiac_polizas, parsear_eiac_recibos
+from ingestion.eiac_xml import (
+    detectar_tipo_eiac,
+    parsear_eiac_polizas,
+    parsear_eiac_polizas_riesgos,
+    parsear_eiac_recibos,
+)
 from ingestion.facturacion import parsear_facturacion
 from ingestion.factura_pdf import parsear_factura_pdf
 from ingestion.liquidacion import parsear_liquidacion
@@ -285,6 +291,13 @@ with st.sidebar:
                     df = parsear_eiac_polizas(f)
                     n = cargar_eiac_polizas(conn, df)
                     mensajes.append(f"EIAC Pólizas ({f.name}): {n} registros actualizados.")
+                    # Mismo fichero, segunda pasada: el detalle de TODOS los
+                    # asegurados (pólizas familiares con varios <Riesgo>),
+                    # no solo el NumeroOrden=1 que ya guardó cargar_eiac_polizas.
+                    f.seek(0)
+                    df_riesgos = parsear_eiac_polizas_riesgos(f)
+                    if not df_riesgos.empty:
+                        cargar_eiac_polizas_riesgos(conn, df_riesgos)
                 else:
                     df = parsear_eiac_recibos(f)
                     n = cargar_eiac_recibos(conn, df)

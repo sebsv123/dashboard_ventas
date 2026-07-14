@@ -42,6 +42,25 @@ CSV oficial lo revela. Por eso las pólizas provisionales se marcan
 siempre con `origen='EIAC'` y `nota_origen`, y nunca sobreescriben una
 fila ya oficial (eso lo garantiza `db.carga.cargar_polizas_provisionales_eiac`
 con INSERT OR IGNORE, no este módulo).
+
+LÍMITE REAL observado al procesar los 8 ficheros EIAC completos de
+Sebastián (no solo el fixture con los 5 casos aislados): el recibo de
+64174100 SÍ está en los ficheros RECI reales, pero su póliza NUNCA
+aparece en ninguno de los 3 ficheros POLI reales — probablemente por la
+misma renumeración de arriba (¿la póliza "vive" bajo 64201679 del lado
+POLI?). Sin un `<Poliza>` de origen, `construir_polizas_provisionales_desde_eiac`
+no puede crear una fila provisional para ella (no hay forma_pago que
+inferir), así que `resumen_produccion_periodo` la deja fuera del cálculo
+de producción hasta que llegue esa póliza por POLI o por el CSV oficial.
+Confirmado con datos reales: la producción de julio calculada
+automáticamente a partir de los 8 ficheros EIAC de Sebastián da
+5.290,20€ (4 de las 5 pólizas), NO los 6.366,60€ de las 5 — ese número sí
+sale exacto cuando las 5 tienen su `<Poliza>` de origen (ver
+`tests/test_eiac_integracion.py`, que usa un fixture con las 5 completas
+para validar el CÁLCULO). La diferencia (1.076,40€) es exactamente la
+aportación de 64174100, y es una ausencia de dato de entrada, no un fallo
+del cálculo — mismo principio que ya aplica `engine.calibracion` para
+periodos con Facturación/Pólizas incompletas.
 """
 
 from __future__ import annotations
@@ -65,12 +84,14 @@ _PISTA_A_FORMA_PAGO = {
     "posible_prepago_anual": "A",
 }
 
-# SituacionPoliza (EIAC) -> situacion (ASISA). Mapeo NO confirmado con
-# datos reales todavía (a diferencia de la correspondencia de número de
-# póliza) — códigos inferidos de forma razonable; si el código real no
-# está aquí, se deja el código EIAC tal cual en vez de forzar un valor.
+# SituacionPoliza (EIAC) -> situacion (ASISA). "EV" (en vigor) -> "A" SÍ
+# está confirmado: es el único valor visto en los 8 ficheros reales de
+# Sebastián. "BJ" -> "B" sigue siendo una suposición razonable sin
+# confirmar (ninguna póliza de baja en esos 8 ficheros todavía); si el
+# código real no está aquí, se deja el código EIAC tal cual en vez de
+# forzar un valor.
 _SITUACION_EIAC_A_ASISA = {
-    "EF": "A",
+    "EV": "A",
     "BJ": "B",
 }
 
@@ -210,23 +231,20 @@ def construir_polizas_provisionales_desde_eiac(
 
         nota = (
             f"Origen: EIAC (id_poliza={p['id_poliza']}), pendiente de confirmar "
-            "con Pólizas oficial."
+            "con Pólizas oficial. razon_social desconocida — EIAC no distingue "
+            "Salud/Vida por ClasePoliza (es un código de transacción: NP/SU/AN, "
+            "confirmado con datos reales), así que no asumas Salud para el "
+            "cálculo de rappel sin revisar manualmente."
         )
         if forma_pago:
             nota += f" forma_pago provisional inferida de pista_forma_pago='{pista}'."
-        clase_poliza = p.get("clase_poliza")
-        if isinstance(clase_poliza, str) and "VIDA" in clase_poliza.upper():
-            nota += (
-                " ClasePoliza sugiere Vida — razon_social se deja sin confirmar "
-                "a propósito; no asumas Salud para el cálculo de rappel sin revisar."
-            )
 
         filas.append(
             {
                 "poliza": numero_poliza,
                 "cliente_codigo": p.get("cliente_codigo"),
                 "razon_social": None,
-                "producto_base": clase_poliza,
+                "producto_base": None,
                 "producto_codigo": None,
                 "fecha_emision": _a_fecha(p.get("fecha_emision")),
                 "fecha_efecto": _a_fecha(p.get("fecha_efecto_inicial")),

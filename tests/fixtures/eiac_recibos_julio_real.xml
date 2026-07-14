@@ -1,53 +1,188 @@
 <?xml version="1.0" encoding="ISO-8859-15"?>
-<!-- 5 casos reales cruzados a mano por Sebastián (conversación), usados
-     para verificar que la producción de julio 2026 calculada por
-     engine.eiac_integracion coincide con el cálculo manual: 6.366,60€. -->
-<EIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC">
-  <Recibos>
-    <!-- Poliza 1: 89.70 * 12 = 1.076,40 -->
+<!-- 5 casos reales cruzados a mano por Sebastián (conversación), extraídos
+     y re-verificados directamente contra los 8 ficheros EIAC reales que
+     ya tiene descargados. Estructura real (DatosPoliza/IdPoliza,
+     DatosRecibo/Fechas/..., DatosRecibo/GestionCobro/DatosFormaPago/...,
+     DatosRecibo/DatosImportes/Importes/...)  -  sin bloques de datos
+     personales (Persona/Titular/Domicilio/Contacto/IBAN), que el parser
+     no lee y que en el fichero real sí contienen PII de clientes.
+
+     Dos de las 5 pólizas (64201679, 64226440) incluyen aquí un intento
+     PE previo con un importe ligeramente distinto al CO final  -  el
+     mismo patrón de "reintentos con céntimos que fluctúan" que se
+     encontró en los ficheros reales y que motivó cambiar la clave de
+     deduplicación de (id_poliza, importe) a (id_poliza, fecha_efecto).
+
+     Cálculo manual verificado: 1076.40 + 1512.00 + 1778.40 + 590.40 +
+     1409.40 = 6366.60€ -->
+<ProcesosEIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC">
+  <Objetos>
+    <!-- Poliza 1 (24300-64174100): 89.70 * 12 = 1.076,40 -->
     <Recibo>
-      <IdPoliza>24300-64174100</IdPoliza>
-      <PrimaTotal>89.85</PrimaTotal>
-      <PrimaNeta>89.70</PrimaNeta>
-      <SituacionRecibo>CO</SituacionRecibo>
-      <FechaEfectoInicial>2026-06-30</FechaEfectoInicial>
-      <ClaseFormaPago>CC</ClaseFormaPago>
+      <DatosPoliza>
+        <IdPoliza>24300-64174100</IdPoliza>
+      </DatosPoliza>
+      <DatosRecibo>
+        <SituacionRecibo>CO</SituacionRecibo>
+        <Fechas>
+          <FechaEfectoInicial>2026-06-30T00:00:00</FechaEfectoInicial>
+        </Fechas>
+        <GestionCobro>
+          <DatosFormaPago>
+            <ClaseFormaPago>CC</ClaseFormaPago>
+          </DatosFormaPago>
+        </GestionCobro>
+        <DatosImportes>
+          <Importes>
+            <PrimaTotal>89.85</PrimaTotal>
+            <PrimaNeta>89.70</PrimaNeta>
+          </Importes>
+        </DatosImportes>
+      </DatosRecibo>
     </Recibo>
-    <!-- Poliza 2: 126.00 * 12 = 1.512,00 -->
+
+    <!-- Poliza 2 (24300-64201679): intento PE con importe distinto (real,
+         126.33) y luego el CO definitivo (126.24) -> 126.00 * 12 = 1.512,00 -->
     <Recibo>
-      <IdPoliza>24300-64201679</IdPoliza>
-      <PrimaTotal>126.24</PrimaTotal>
-      <PrimaNeta>126.00</PrimaNeta>
-      <SituacionRecibo>CO</SituacionRecibo>
-      <FechaEfectoInicial>2026-06-30</FechaEfectoInicial>
-      <ClaseFormaPago>CC</ClaseFormaPago>
+      <DatosPoliza>
+        <IdPoliza>24300-64201679</IdPoliza>
+      </DatosPoliza>
+      <DatosRecibo>
+        <SituacionRecibo>PE</SituacionRecibo>
+        <Fechas>
+          <FechaEfectoInicial>2026-06-30T00:00:00</FechaEfectoInicial>
+        </Fechas>
+        <GestionCobro>
+          <DatosFormaPago>
+            <ClaseFormaPago>CC</ClaseFormaPago>
+          </DatosFormaPago>
+        </GestionCobro>
+        <DatosImportes>
+          <Importes>
+            <PrimaTotal>126.33</PrimaTotal>
+            <PrimaNeta>126.00</PrimaNeta>
+          </Importes>
+        </DatosImportes>
+      </DatosRecibo>
     </Recibo>
-    <!-- Poliza 3: 148.20 * 12 = 1.778,40 -->
     <Recibo>
-      <IdPoliza>24300-64226440</IdPoliza>
-      <PrimaTotal>148.48</PrimaTotal>
-      <PrimaNeta>148.20</PrimaNeta>
-      <SituacionRecibo>CO</SituacionRecibo>
-      <FechaEfectoInicial>2026-07-01</FechaEfectoInicial>
-      <ClaseFormaPago>CC</ClaseFormaPago>
+      <DatosPoliza>
+        <IdPoliza>24300-64201679</IdPoliza>
+      </DatosPoliza>
+      <DatosRecibo>
+        <SituacionRecibo>CO</SituacionRecibo>
+        <Fechas>
+          <FechaEfectoInicial>2026-06-30T00:00:00</FechaEfectoInicial>
+        </Fechas>
+        <GestionCobro>
+          <DatosFormaPago>
+            <ClaseFormaPago>CC</ClaseFormaPago>
+          </DatosFormaPago>
+        </GestionCobro>
+        <DatosImportes>
+          <Importes>
+            <PrimaTotal>126.24</PrimaTotal>
+            <PrimaNeta>126.00</PrimaNeta>
+          </Importes>
+        </DatosImportes>
+      </DatosRecibo>
     </Recibo>
-    <!-- Poliza 4: 49.20 * 12 = 590,40 (Cristina Romero Alpuente) -->
+
+    <!-- Poliza 3 (24300-64226440): intento PE con importe distinto (real,
+         148.74) y luego el CO definitivo (148.48) -> 148.20 * 12 = 1.778,40 -->
     <Recibo>
-      <IdPoliza>24300-64261922</IdPoliza>
-      <PrimaTotal>49.29</PrimaTotal>
-      <PrimaNeta>49.20</PrimaNeta>
-      <SituacionRecibo>CO</SituacionRecibo>
-      <FechaEfectoInicial>2026-07-07</FechaEfectoInicial>
-      <ClaseFormaPago>CC</ClaseFormaPago>
+      <DatosPoliza>
+        <IdPoliza>24300-64226440</IdPoliza>
+      </DatosPoliza>
+      <DatosRecibo>
+        <SituacionRecibo>PE</SituacionRecibo>
+        <Fechas>
+          <FechaEfectoInicial>2026-07-01T00:00:00</FechaEfectoInicial>
+        </Fechas>
+        <GestionCobro>
+          <DatosFormaPago>
+            <ClaseFormaPago>CC</ClaseFormaPago>
+          </DatosFormaPago>
+        </GestionCobro>
+        <DatosImportes>
+          <Importes>
+            <PrimaTotal>148.74</PrimaTotal>
+            <PrimaNeta>148.20</PrimaNeta>
+          </Importes>
+        </DatosImportes>
+      </DatosRecibo>
     </Recibo>
-    <!-- Poliza 5: prepago anual, tal cual = 1.409,40 (Residents, Maria Eliana Valdes Manriquez) -->
     <Recibo>
-      <IdPoliza>24848-64276918</IdPoliza>
-      <PrimaTotal>1411.90</PrimaTotal>
-      <PrimaNeta>1409.40</PrimaNeta>
-      <SituacionRecibo>CO</SituacionRecibo>
-      <FechaEfectoInicial>2026-07-01</FechaEfectoInicial>
-      <ClaseFormaPago>TA</ClaseFormaPago>
+      <DatosPoliza>
+        <IdPoliza>24300-64226440</IdPoliza>
+      </DatosPoliza>
+      <DatosRecibo>
+        <SituacionRecibo>CO</SituacionRecibo>
+        <Fechas>
+          <FechaEfectoInicial>2026-07-01T00:00:00</FechaEfectoInicial>
+        </Fechas>
+        <GestionCobro>
+          <DatosFormaPago>
+            <ClaseFormaPago>CC</ClaseFormaPago>
+          </DatosFormaPago>
+        </GestionCobro>
+        <DatosImportes>
+          <Importes>
+            <PrimaTotal>148.48</PrimaTotal>
+            <PrimaNeta>148.20</PrimaNeta>
+          </Importes>
+        </DatosImportes>
+      </DatosRecibo>
     </Recibo>
-  </Recibos>
-</EIAC>
+
+    <!-- Poliza 4 (24300-64261922): 49.20 * 12 = 590,40 (Cristina Romero Alpuente).
+         El CO real usa ClaseFormaPago=PC (no CC), confirmado en el fichero real. -->
+    <Recibo>
+      <DatosPoliza>
+        <IdPoliza>24300-64261922</IdPoliza>
+      </DatosPoliza>
+      <DatosRecibo>
+        <SituacionRecibo>CO</SituacionRecibo>
+        <Fechas>
+          <FechaEfectoInicial>2026-07-07T00:00:00</FechaEfectoInicial>
+        </Fechas>
+        <GestionCobro>
+          <DatosFormaPago>
+            <ClaseFormaPago>PC</ClaseFormaPago>
+          </DatosFormaPago>
+        </GestionCobro>
+        <DatosImportes>
+          <Importes>
+            <PrimaTotal>49.29</PrimaTotal>
+            <PrimaNeta>49.20</PrimaNeta>
+          </Importes>
+        </DatosImportes>
+      </DatosRecibo>
+    </Recibo>
+
+    <!-- Poliza 5 (24848-64276918): prepago anual, tal cual = 1.409,40
+         (Residents, María Eliana Valdés Manríquez) -->
+    <Recibo>
+      <DatosPoliza>
+        <IdPoliza>24848-64276918</IdPoliza>
+      </DatosPoliza>
+      <DatosRecibo>
+        <SituacionRecibo>CO</SituacionRecibo>
+        <Fechas>
+          <FechaEfectoInicial>2026-07-01T00:00:00</FechaEfectoInicial>
+        </Fechas>
+        <GestionCobro>
+          <DatosFormaPago>
+            <ClaseFormaPago>TA</ClaseFormaPago>
+          </DatosFormaPago>
+        </GestionCobro>
+        <DatosImportes>
+          <Importes>
+            <PrimaTotal>1411.90</PrimaTotal>
+            <PrimaNeta>1409.40</PrimaNeta>
+          </Importes>
+        </DatosImportes>
+      </DatosRecibo>
+    </Recibo>
+  </Objetos>
+</ProcesosEIAC>
