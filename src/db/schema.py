@@ -104,6 +104,39 @@ CREATE TABLE IF NOT EXISTS resumen_mensual (
     comision_neta_real REAL,         -- NULL si el mes aún no tiene factura_pdf
     fecha_actualizacion TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Canal EIAC (estándar TIREA, ficheros XML "EIAC-ENV-POLI-*" /
+-- "EIAC-ENV-RECI-*"). Tablas propias, separadas de polizas/facturacion a
+-- propósito: `id_poliza` aquí usa el espacio de numeración TIREA
+-- ("codigo_cliente-numero_poliza"), que NO es el mismo que la columna
+-- "POLIZA" de los CSV de ASISA — cruzarlos por igualdad rompería en
+-- silencio el motor de rappel/comisiones. Ver docstring de
+-- `ingestion.eiac_xml` para el detalle completo de esta decisión.
+CREATE TABLE IF NOT EXISTS eiac_polizas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_poliza TEXT NOT NULL,
+    cliente_codigo TEXT,
+    numero_poliza TEXT,
+    situacion_poliza TEXT,
+    clase_poliza TEXT,
+    fecha_efecto_inicial TEXT,
+    fecha_emision TEXT,
+    descripcion_riesgo TEXT,
+    fecha_import TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(id_poliza)
+);
+
+CREATE TABLE IF NOT EXISTS eiac_recibos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_poliza TEXT NOT NULL,
+    prima_total REAL,
+    prima_neta REAL,
+    situacion_recibo TEXT,           -- ya deduplicado por ingestion.eiac_xml (CO > PE)
+    fecha_efecto_inicial TEXT,
+    clase_forma_pago TEXT,
+    pista_forma_pago TEXT,           -- heurística, no un hecho confirmado
+    UNIQUE(id_poliza, prima_total, fecha_efecto_inicial)
+);
 """
 
 

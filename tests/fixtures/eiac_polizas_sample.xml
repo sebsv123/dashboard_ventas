@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="ISO-8859-15"?>
+<EIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC">
+  <Polizas>
+    <Poliza>
+      <IdPoliza>0001234-9876541</IdPoliza>
+      <SituacionPoliza>EF</SituacionPoliza>
+      <ClasePoliza>SALUD</ClasePoliza>
+      <FechaEfectoInicial>2026-06-01</FechaEfectoInicial>
+      <FechaEmision>2026-05-20</FechaEmision>
+      <DescripcionRiesgo>JUAN PEREZ GARCIA</DescripcionRiesgo>
+    </Poliza>
+    <Poliza>
+      <IdPoliza>0001234-9876542</IdPoliza>
+      <SituacionPoliza>EF</SituacionPoliza>
+      <ClasePoliza>SALUD</ClasePoliza>
+      <FechaEfectoInicial>2026-09-15</FechaEfectoInicial>
+      <FechaEmision>2026-07-01</FechaEmision>
+      <DescripcionRiesgo>MARIA LOPEZ SANCHEZ</DescripcionRiesgo>
+    </Poliza>
+    <Poliza>
+      <IdPoliza>0001234-9876543</IdPoliza>
+      <SituacionPoliza>BJ</SituacionPoliza>
+      <ClasePoliza>SALUD</ClasePoliza>
+      <FechaEfectoInicial>2026-01-10</FechaEfectoInicial>
+      <FechaEmision>2025-12-28</FechaEmision>
+      <DescripcionRiesgo>ANTONIO RUIZ DIAZ</DescripcionRiesgo>
+    </Poliza>
+  </Polizas>
+</EIAC>

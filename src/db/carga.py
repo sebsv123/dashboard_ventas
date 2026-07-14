@@ -102,6 +102,60 @@ def cargar_liquidacion(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     return filas_insertadas
 
 
+def cargar_eiac_polizas(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
+    """Upsert por id_poliza (maestro TIREA), igual criterio que `cargar_polizas`."""
+    filas_insertadas = 0
+    cur = conn.cursor()
+    for _, r in df.iterrows():
+        cur.execute(
+            """
+            INSERT INTO eiac_polizas
+                (id_poliza, cliente_codigo, numero_poliza, situacion_poliza,
+                 clase_poliza, fecha_efecto_inicial, fecha_emision, descripcion_riesgo)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id_poliza) DO UPDATE SET
+                cliente_codigo=excluded.cliente_codigo,
+                numero_poliza=excluded.numero_poliza,
+                situacion_poliza=excluded.situacion_poliza,
+                clase_poliza=excluded.clase_poliza,
+                fecha_efecto_inicial=excluded.fecha_efecto_inicial,
+                fecha_emision=excluded.fecha_emision,
+                descripcion_riesgo=excluded.descripcion_riesgo
+            """,
+            (
+                r["id_poliza"], r["cliente_codigo"], r["numero_poliza"], r["situacion_poliza"],
+                r["clase_poliza"], _fecha_a_texto(r["fecha_efecto_inicial"]),
+                _fecha_a_texto(r["fecha_emision"]), r["descripcion_riesgo"],
+            ),
+        )
+        filas_insertadas += 1
+    conn.commit()
+    return filas_insertadas
+
+
+def cargar_eiac_recibos(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
+    """Los recibos ya llegan deduplicados (CO > PE) desde `ingestion.eiac_xml`."""
+    filas_insertadas = 0
+    cur = conn.cursor()
+    for _, r in df.iterrows():
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO eiac_recibos
+                (id_poliza, prima_total, prima_neta, situacion_recibo,
+                 fecha_efecto_inicial, clase_forma_pago, pista_forma_pago)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                r["id_poliza"], r["prima_total"], r["prima_neta"], r["situacion_recibo"],
+                _fecha_a_texto(r["fecha_efecto_inicial"]), r["clase_forma_pago"],
+                r["pista_forma_pago"],
+            ),
+        )
+        filas_insertadas += cur.rowcount
+    conn.commit()
+    return filas_insertadas
+
+
 def cargar_factura_pdf(conn: sqlite3.Connection, facturas: list) -> int:
     filas_insertadas = 0
     cur = conn.cursor()

@@ -19,6 +19,8 @@ RAIZ = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(RAIZ / "src"))
 
 from db.carga import (
+    cargar_eiac_polizas,
+    cargar_eiac_recibos,
     cargar_facturacion,
     cargar_liquidacion,
     cargar_polizas,
@@ -47,6 +49,7 @@ from engine.insights import (
 from engine.proyeccion import proyectar_cierre_mes
 from engine.rappel import calcular_rappel_inicial
 from engine.reconciliacion import detectar_polizas_sin_cobrar
+from ingestion.eiac_xml import detectar_tipo_eiac, parsear_eiac_polizas, parsear_eiac_recibos
 from ingestion.facturacion import parsear_facturacion
 from ingestion.factura_pdf import parsear_factura_pdf
 from ingestion.liquidacion import parsear_liquidacion
@@ -106,10 +109,14 @@ def cargar_datos():
     facturacion = pd.read_sql("SELECT * FROM facturacion", conn, parse_dates=["fecha_desde", "fecha_hasta"])
     liquidacion = pd.read_sql("SELECT * FROM liquidacion", conn, parse_dates=["fecha_desde", "fecha_hasta"])
     factura_pdf = pd.read_sql("SELECT * FROM factura_pdf", conn)
-    return polizas, facturacion, liquidacion, factura_pdf
+    eiac_polizas = pd.read_sql(
+        "SELECT * FROM eiac_polizas", conn, parse_dates=["fecha_efecto_inicial", "fecha_emision"]
+    )
+    eiac_recibos = pd.read_sql("SELECT * FROM eiac_recibos", conn, parse_dates=["fecha_efecto_inicial"])
+    return polizas, facturacion, liquidacion, factura_pdf, eiac_polizas, eiac_recibos
 
 
-df_polizas, df_facturacion, df_liquidacion, df_factura_pdf = cargar_datos()
+df_polizas, df_facturacion, df_liquidacion, df_factura_pdf, df_eiac_polizas, df_eiac_recibos = cargar_datos()
 
 # --- Cabecera -----------------------------------------------------------------
 col_logo, col_titulo = st.columns([1, 4])
@@ -221,6 +228,17 @@ with st.sidebar:
         "Factura (PDF)", type="pdf", accept_multiple_files=True, key=f"factura_pdf_{uk}"
     )
 
+    st.subheader("EIAC (TIREA, XML)")
+    st.caption(
+        "Canal separado del resto — usa su propia numeración de póliza "
+        "(TIREA), así que de momento no se cruza con Facturación/Pólizas/"
+        "Liquidación. Se detecta si es de pólizas o de recibos por el "
+        "nombre del fichero (EIAC-ENV-POLI-* / EIAC-ENV-RECI-*)."
+    )
+    f_eiac = st.file_uploader(
+        "Ficheros EIAC (XML)", type="xml", accept_multiple_files=True, key=f"eiac_{uk}"
+    )
+
     if st.button("Procesar ficheros subidos", type="primary", width="stretch"):
         mensajes = []
         try:
@@ -240,6 +258,16 @@ with st.sidebar:
                 facturas = parsear_factura_pdf(f)
                 n = cargar_factura_pdf(conn, facturas)
                 mensajes.append(f"Factura PDF ({f.name}): {n} entidad(es) importada(s).")
+            for f in f_eiac:
+                tipo = detectar_tipo_eiac(f.name)
+                if tipo == "polizas":
+                    df = parsear_eiac_polizas(f)
+                    n = cargar_eiac_polizas(conn, df)
+                    mensajes.append(f"EIAC Pólizas ({f.name}): {n} registros actualizados.")
+                else:
+                    df = parsear_eiac_recibos(f)
+                    n = cargar_eiac_recibos(conn, df)
+                    mensajes.append(f"EIAC Recibos ({f.name}): {n} filas nuevas importadas.")
 
             if not mensajes:
                 st.warning("No has seleccionado ningún fichero.")
@@ -265,6 +293,14 @@ with st.sidebar:
             st.caption(
                 f"**Pólizas:** {len(df_polizas)} en cartera (foto completa, "
                 f"sin periodos propios) · última actualización {ultima_actualizacion}"
+            )
+        if df_eiac_polizas.empty and df_eiac_recibos.empty:
+            st.caption("**EIAC (TIREA):** ninguno todavía")
+        else:
+            st.caption(
+                f"**EIAC (TIREA):** {len(df_eiac_polizas)} póliza(s), "
+                f"{len(df_eiac_recibos)} recibo(s) (deduplicados) · canal "
+                "separado, sin cruzar con el resto todavía"
             )
 
     st.divider()

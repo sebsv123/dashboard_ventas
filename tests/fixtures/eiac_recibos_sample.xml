@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="ISO-8859-15"?>
+<EIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC">
+  <Recibos>
+    <!-- Poliza 0001234-9876541: mismo recibo (360.00) intentado dos veces,
+         primero PE y luego CO -> debe quedar una sola fila, CO. -->
+    <Recibo>
+      <IdPoliza>0001234-9876541</IdPoliza>
+      <PrimaTotal>360.00</PrimaTotal>
+      <PrimaNeta>300.00</PrimaNeta>
+      <SituacionRecibo>PE</SituacionRecibo>
+      <FechaEfectoInicial>2026-06-01</FechaEfectoInicial>
+      <ClaseFormaPago>CC</ClaseFormaPago>
+    </Recibo>
+    <Recibo>
+      <IdPoliza>0001234-9876541</IdPoliza>
+      <PrimaTotal>360.00</PrimaTotal>
+      <PrimaNeta>300.00</PrimaNeta>
+      <SituacionRecibo>CO</SituacionRecibo>
+      <FechaEfectoInicial>2026-06-01</FechaEfectoInicial>
+      <ClaseFormaPago>CC</ClaseFormaPago>
+    </Recibo>
+    <!-- Misma poliza, recibo mensual distinto (30.00) -> no debe colapsarse
+         con el anterior, es un importe diferente. -->
+    <Recibo>
+      <IdPoliza>0001234-9876541</IdPoliza>
+      <PrimaTotal>30.00</PrimaTotal>
+      <PrimaNeta>25.00</PrimaNeta>
+      <SituacionRecibo>CO</SituacionRecibo>
+      <FechaEfectoInicial>2026-07-01</FechaEfectoInicial>
+      <ClaseFormaPago>CC</ClaseFormaPago>
+    </Recibo>
+    <!-- Poliza 0001234-9876542: recibo aun sin confirmar (solo PE, nunca CO) -->
+    <Recibo>
+      <IdPoliza>0001234-9876542</IdPoliza>
+      <PrimaTotal>300.00</PrimaTotal>
+      <PrimaNeta>250.00</PrimaNeta>
+      <SituacionRecibo>PE</SituacionRecibo>
+      <FechaEfectoInicial>2026-09-15</FechaEfectoInicial>
+      <ClaseFormaPago>TA</ClaseFormaPago>
+    </Recibo>
+  </Recibos>
+</EIAC>
