@@ -138,6 +138,30 @@ def resumen_produccion_periodo(
     return ResumenPeriodoRapido(periodo, True, round(produccion_salud, 2), len(fusion))
 
 
+def periodos_futuros_con_datos(df_facturacion: pd.DataFrame, periodo_limite: str) -> list[str]:
+    """Periodos (AAAA-MM) con alguna alta detectada MÁS ALLÁ de `periodo_limite`
+    (normalmente "mes siguiente" en Vista rápida).
+
+    Pensado para el canal EIAC, que puede adelantar ventas de meses muy
+    posteriores al CSV oficial de Facturación (caso real: una póliza con
+    FechaEfectoInicial en septiembre subida en julio). Solo devuelve
+    periodos con datos reales — nunca "todos los meses futuros posibles",
+    para no mostrar un hueco vacío o un 0€ engañoso.
+
+    La comparación `p > periodo_limite` es una comparación de texto
+    "AAAA-MM", que ordena igual que el orden cronológico real siempre que
+    ambos lados tengan el mismo formato de 4+2 dígitos — cierto para todo
+    `periodo_liquidacion` de este proyecto.
+    """
+    altas = primeras_altas_por_periodo(df_facturacion)
+    if altas.empty:
+        return []
+    periodos = sorted(
+        p for p in altas["periodo_liquidacion"].dropna().unique() if p > periodo_limite
+    )
+    return periodos
+
+
 def hay_suficiente_historico(df_produccion: pd.DataFrame) -> bool:
     return df_produccion["periodo"].nunique() >= MESES_MINIMOS_PARA_TENDENCIA
 

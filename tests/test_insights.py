@@ -11,6 +11,7 @@ from engine.insights import (
     construir_produccion_polizas,
     evolucion_mensual,
     hay_suficiente_historico,
+    periodos_futuros_con_datos,
     primeras_altas_por_periodo,
     ranking_productos,
     ranking_provincias,
@@ -262,3 +263,42 @@ def test_resumen_produccion_periodo_sin_polizas_cargadas_no_revienta(df_facturac
     resumen = resumen_produccion_periodo(pd.DataFrame(), df_facturacion, contrato, "2026-06")
     assert resumen.tiene_datos is True  # sí hay recibos de Facturación
     assert resumen.produccion_salud == 0.0  # pero no se puede clasificar sin Pólizas
+
+
+# --- periodos_futuros_con_datos ---------------------------------------------
+
+def _df_facturacion_con_septiembre():
+    return pd.DataFrame(
+        [
+            {"poliza": "P1", "periodo_liquidacion": "2026-06", "prima_neta": 30.0, "fecha_desde": "2026-06-01"},
+            {"poliza": "P2", "periodo_liquidacion": "2026-07", "prima_neta": 40.0, "fecha_desde": "2026-07-01"},
+            # Caso real que motivó esto: una venta de EIAC con efecto en
+            # septiembre, varios meses por delante del mes siguiente (agosto).
+            {"poliza": "P3", "periodo_liquidacion": "2026-09", "prima_neta": 50.0, "fecha_desde": "2026-09-01"},
+        ]
+    )
+
+
+def test_periodos_futuros_con_datos_devuelve_solo_lo_posterior_al_limite():
+    periodos = periodos_futuros_con_datos(_df_facturacion_con_septiembre(), periodo_limite="2026-08")
+    assert periodos == ["2026-09"]
+
+
+def test_periodos_futuros_con_datos_excluye_actual_y_siguiente():
+    # "2026-06" y "2026-07" no deben aparecer si el límite es "2026-07"
+    # (mes siguiente ya mostrado en Vista rápida aparte).
+    periodos = periodos_futuros_con_datos(_df_facturacion_con_septiembre(), periodo_limite="2026-07")
+    assert "2026-06" not in periodos
+    assert "2026-07" not in periodos
+    assert periodos == ["2026-09"]
+
+
+def test_periodos_futuros_con_datos_vacio_cuando_no_hay_nada_mas_alla():
+    df = pd.DataFrame(
+        [{"poliza": "P1", "periodo_liquidacion": "2026-06", "prima_neta": 30.0, "fecha_desde": "2026-06-01"}]
+    )
+    assert periodos_futuros_con_datos(df, periodo_limite="2026-08") == []
+
+
+def test_periodos_futuros_con_datos_facturacion_vacia_no_revienta():
+    assert periodos_futuros_con_datos(pd.DataFrame(), periodo_limite="2026-08") == []
