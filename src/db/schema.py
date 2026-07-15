@@ -174,8 +174,15 @@ def conectar(db_path: str | Path) -> sqlite3.Connection:
     # reruns en hilos distintos al que crea la conexión cacheada; sqlite3 lo
     # bloquea por defecto aunque en nuestro caso (una sola persona, escrituras
     # secuenciales) es seguro desactivarlo.
-    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn = sqlite3.connect(db_path, check_same_thread=False, timeout=10)
     conn.execute("PRAGMA foreign_keys = ON")
+    # busy_timeout: si otra conexión (p.ej. dos pestañas del dashboard
+    # abiertas a la vez, o dos lanzamientos del icono de escritorio sin
+    # cerrar el anterior) tiene la BD bloqueada un instante, espera hasta
+    # 10s reintentando en vez de fallar al momento con "database is
+    # locked" — el `timeout` del connect() de arriba cubre la apertura,
+    # este PRAGMA cubre cada sentencia SQL individual después de conectar.
+    conn.execute("PRAGMA busy_timeout = 10000")
     return conn
 
 
