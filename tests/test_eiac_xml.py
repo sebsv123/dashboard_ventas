@@ -26,6 +26,17 @@ def test_parsear_eiac_polizas_basico():
     assert fila["fecha_efecto_inicial"] == date(2026, 6, 1)
     assert fila["fecha_emision"] == date(2026, 5, 20)
     assert fila["descripcion_riesgo"] == "JUAN PEREZ GARCIA"
+    assert fila["descripcion_ramo"] == "Asistencia sanitaria"
+    assert fila["codigo_entidad_interno"] == "Asisa"
+
+
+def test_parsear_eiac_polizas_sin_datos_de_ramo_queda_none():
+    # 9876542 no trae CodigoEntidad/DatosRamo en el fixture (simula una
+    # póliza real donde ese bloque no viene, o no se ha visto todavía).
+    df = parsear_eiac_polizas(FIXTURES / "eiac_polizas_sample.xml")
+    fila = df[df["id_poliza"] == "0001234-9876542"].iloc[0]
+    assert pd.isna(fila["descripcion_ramo"])
+    assert pd.isna(fila["codigo_entidad_interno"])
 
 
 def test_parsear_eiac_polizas_fecha_efecto_futura_no_se_filtra():

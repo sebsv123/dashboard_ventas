@@ -27,7 +27,7 @@ from datetime import date
 
 import pandas as pd
 
-from engine.comisiones import aplicar_retencion, estimar_comision_poliza
+from engine.comisiones import aplicar_retencion, estimar_comision_poliza, refinar_confianza_producto_asumido
 from engine.config_contrato import ContratoConfig
 from engine.insights import primeras_altas_por_periodo
 from engine.rappel import ResultadoRappelInicial, calcular_rappel_inicial
@@ -89,7 +89,11 @@ def estimar_comision_y_rappel_periodo(
     periodo (`engine.insights.primeras_altas_por_periodo`, filtrado por
     `periodo_liquidacion`) con Pólizas por número de póliza — debe traer
     ya las columnas de Pólizas (fecha_efecto, forma_pago, razon_social,
-    poliza) además de `prima_neta` de Facturación.
+    poliza) además de `prima_neta` de Facturación. Si trae también
+    `razon_social_asumida` (pólizas provisionales de EIAC con producto
+    asumido por defecto, ver `engine.eiac_integracion`), la confianza de
+    esa comisión se baja a "baja" — no afecta al importe, solo a cómo se
+    presenta la confianza.
     """
     anio, mes = (int(x) for x in periodo.split("-"))
     fecha_ref = date(anio, mes, 1)
@@ -102,6 +106,9 @@ def estimar_comision_y_rappel_periodo(
         estimacion = estimar_comision_poliza(
             fila, contrato, prima_anual=prima_anual,
             prima_recibo_mensual=prima_recibo_mensual, fecha_referencia=fecha_ref,
+        )
+        estimacion = refinar_confianza_producto_asumido(
+            estimacion, fila.get("razon_social_asumida") is True
         )
         comision_bruta_total += estimacion.comision_bruta_estimada
         if fila["razon_social"] not in contrato.comisiones_vida:

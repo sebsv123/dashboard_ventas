@@ -348,6 +348,29 @@ def refinar_confianza_salud_mensual(
     return dataclasses.replace(estimacion, confianza="baja", nota=nota)
 
 
+def refinar_confianza_producto_asumido(
+    estimacion: EstimacionComision, razon_social_asumida: bool
+) -> EstimacionComision:
+    """Baja la confianza a "baja" cuando la comisión se calculó con un
+    `razon_social` ASUMIDO por defecto, no confirmado.
+
+    Caso real: pólizas provisionales de EIAC donde solo se sabe que son de
+    Salud (por DescripcionRamo/CodigoEntidad), no el producto exacto —
+    `engine.eiac_integracion.construir_polizas_provisionales_desde_eiac`
+    asume "ASISA PARTICULARES" en vez de dejar la comisión en 0€, pero esa
+    suposición debe marcarse como menos fiable que una póliza con producto
+    ya confirmado por el CSV oficial de Pólizas.
+    """
+    if not razon_social_asumida:
+        return estimacion
+    nota = (
+        f"{estimacion.nota} Producto exacto no confirmado, % asumido por "
+        "defecto (ASISA Particulares) — EIAC solo confirma que es Salud, "
+        "no el producto concreto."
+    ).strip()
+    return dataclasses.replace(estimacion, confianza="baja", nota=nota)
+
+
 @dataclass
 class ResumenHistorialAjustesCartera:
     """Cuántas pólizas de salud mensual de TODA la cartera (no solo las del

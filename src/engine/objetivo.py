@@ -11,6 +11,15 @@ periodo (no hay ningún recibo con ese periodo_liquidacion) o cuando hay
 altas de Facturación que no cruzan con ninguna póliza (falta subir/
 actualizar Pólizas) — así un mes sin datos nunca se confunde con un mes
 de producción 0€ real.
+
+`es_eiac_parcial` distingue un caso más: un mes con TODA su producción
+proveniente de EIAC, sin ni una sola fila de Facturación oficial todavía
+(caso real: marzo 2026). `engine.eiac_integracion.construir_facturacion_desde_eiac`
+marca sus filas con `cartera="EIAC"`, así que se detecta mirando esa
+columna. Un mes así puede aparecer como `completo=True` (si todas sus
+altas EIAC sí cruzan con Pólizas) pero sigue sin estar confirmado por el
+CSV oficial — la UI debe distinguirlo de un mes ya cerrado con datos
+oficiales.
 """
 
 from __future__ import annotations
@@ -27,6 +36,7 @@ from engine.insights import primeras_altas_por_periodo
 class DesgloseMesObjetivo:
     periodo: str
     completo: bool
+    es_eiac_parcial: bool = False
     salud_mensual: float = 0.0
     salud_anual: float = 0.0
     vida: float = 0.0
@@ -56,6 +66,25 @@ class ObjetivoAnual:
     def meses_incompletos(self) -> list[str]:
         return [m.periodo for m in self.meses if not m.completo]
 
+    @property
+    def meses_eiac_parcial(self) -> list[str]:
+        return [m.periodo for m in self.meses if m.es_eiac_parcial]
+
+
+def _hay_facturacion_oficial(df_facturacion: pd.DataFrame, periodo: str) -> bool:
+    """True si el periodo tiene alguna fila de Facturación que NO venga de
+    EIAC (columna `cartera` != "EIAC"). Si la columna `cartera` no existe
+    (fixtures/CSV que no la traen), se asume oficial — no se puede
+    distinguir el origen sin ella."""
+    if df_facturacion.empty:
+        return False
+    filas_periodo = df_facturacion[df_facturacion["periodo_liquidacion"] == periodo]
+    if filas_periodo.empty:
+        return False
+    if "cartera" not in filas_periodo.columns:
+        return True
+    return bool((filas_periodo["cartera"] != "EIAC").any())
+
 
 def _desglose_mes(
     df_polizas: pd.DataFrame, df_facturacion: pd.DataFrame, contrato: ContratoConfig, periodo: str
@@ -63,12 +92,13 @@ def _desglose_mes(
     hay_facturacion_del_periodo = bool(
         not df_facturacion.empty and (df_facturacion["periodo_liquidacion"] == periodo).any()
     )
+    es_eiac_parcial = hay_facturacion_del_periodo and not _hay_facturacion_oficial(df_facturacion, periodo)
 
     altas = primeras_altas_por_periodo(df_facturacion)
     altas = altas[altas["periodo_liquidacion"] == periodo]
 
     if altas.empty or df_polizas.empty:
-        return DesgloseMesObjetivo(periodo, completo=hay_facturacion_del_periodo)
+        return DesgloseMesObjetivo(periodo, completo=hay_facturacion_del_periodo, es_eiac_parcial=es_eiac_parcial)
 
     fusion = altas.merge(
         df_polizas[["poliza", "forma_pago", "razon_social"]], on="poliza", how="left"
@@ -76,7 +106,8 @@ def _desglose_mes(
     faltan_polizas = bool(fusion["forma_pago"].isna().any())
 
     desglose = DesgloseMesObjetivo(
-        periodo, completo=hay_facturacion_del_periodo and not faltan_polizas
+        periodo, completo=hay_facturacion_del_periodo and not faltan_polizas,
+        es_eiac_parcial=es_eiac_parcial,
     )
     for _, fila in fusion.dropna(subset=["forma_pago"]).iterrows():
         prima = fila["prima_neta"] if fila["forma_pago"] == "A" else fila["prima_neta"] * 12

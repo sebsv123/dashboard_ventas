@@ -134,9 +134,19 @@ df_polizas, df_facturacion, df_liquidacion, df_factura_pdf, df_eiac_polizas, df_
 # que esos recibos NUNCA se escriben en la tabla `facturacion` (ver
 # engine.eiac_integracion). Solo se usa en Vista rápida/Rappel/Resumen —
 # el resto de pestañas sigue viendo únicamente los datos oficiales.
-_resultado_eiac = integrar_eiac(df_eiac_polizas, df_eiac_recibos, df_polizas)
+_resultado_eiac = integrar_eiac(df_eiac_polizas, df_eiac_recibos, df_polizas, df_facturacion)
 df_polizas_con_eiac = (
+    # drop_duplicates(keep="last"): una póliza todavía provisional
+    # (origen='EIAC') puede aparecer AQUÍ DOS VECES -- una vez ya
+    # persistida en df_polizas (leída de la BD) y otra vez recién
+    # regenerada en polizas_provisionales con datos más frescos (p.ej. el
+    # ramo, que ahora permite asumir un % de comisión que antes no se
+    # podía) -- construir_polizas_provisionales_desde_eiac solo excluye
+    # pólizas YA OFICIALES, no las que siguen siendo provisionales, así
+    # que sin este dedup cada una de esas pólizas contaría DOS VECES en
+    # producción/comisión. Se queda con la última (la recién regenerada).
     pd.concat([df_polizas, _resultado_eiac.polizas_provisionales], ignore_index=True)
+    .drop_duplicates(subset="poliza", keep="last")
     if not _resultado_eiac.polizas_provisionales.empty else df_polizas
 )
 df_facturacion_con_eiac = (
@@ -391,7 +401,8 @@ with st.sidebar:
                 # CSV oficial todavía no tiene — se lee el estado actual de
                 # la BD (no la variable df_polizas cacheada) para no perder
                 # pólizas oficiales subidas en este mismo lote.
-                df_polizas_bd = pd.read_sql("SELECT poliza FROM polizas", conn)
+                df_polizas_bd = pd.read_sql("SELECT poliza, origen FROM polizas", conn)
+                df_facturacion_bd = pd.read_sql("SELECT poliza FROM facturacion", conn)
                 df_eiac_polizas_bd = pd.read_sql(
                     "SELECT * FROM eiac_polizas", conn,
                     parse_dates=["fecha_efecto_inicial", "fecha_emision"],
@@ -399,7 +410,9 @@ with st.sidebar:
                 df_eiac_recibos_bd = pd.read_sql(
                     "SELECT * FROM eiac_recibos", conn, parse_dates=["fecha_efecto_inicial"]
                 )
-                resultado_integracion = integrar_eiac(df_eiac_polizas_bd, df_eiac_recibos_bd, df_polizas_bd)
+                resultado_integracion = integrar_eiac(
+                    df_eiac_polizas_bd, df_eiac_recibos_bd, df_polizas_bd, df_facturacion_bd
+                )
                 n_provisionales = cargar_polizas_provisionales_eiac(
                     conn, resultado_integracion.polizas_provisionales
                 )
@@ -992,6 +1005,15 @@ with tab_objetivo:
             "NO los incluye, así que probablemente sea mayor en realidad."
         )
 
+    if resultado_objetivo.meses_eiac_parcial:
+        st.warning(
+            "📐 Periodos que dependen SOLO de EIAC, sin ninguna fila de "
+            "Facturación oficial todavía: "
+            f"{', '.join(resultado_objetivo.meses_eiac_parcial)} — sí cuentan "
+            "en el acumulado de arriba, pero su importe puede cambiar cuando "
+            "llegue el CSV oficial de ese periodo (que siempre tiene prioridad)."
+        )
+
     st.divider()
     st.markdown("### Desglose por tipo y mes")
     tabla_meses = pd.DataFrame(
@@ -1003,6 +1025,7 @@ with tab_objetivo:
                 "Vida (€)": m.vida,
                 "Total (€)": m.total,
                 "¿Completo?": "✅" if m.completo else "⚠️ faltan datos",
+                "¿Fuente?": "📐 Solo EIAC" if m.es_eiac_parcial else "✅ CSV oficial",
             }
             for m in resultado_objetivo.meses
         ]

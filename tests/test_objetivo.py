@@ -94,3 +94,53 @@ def test_calcular_objetivo_anual_df_vacios_no_revienta(contrato):
     assert resultado.produccion_total == 0.0
     assert resultado.meses_incompletos == ["2026-01", "2026-02", "2026-03"]
     assert resultado.porcentaje == 0.0
+
+
+# --- es_eiac_parcial ---------------------------------------------------------
+
+def _df_polizas_eiac_parcial():
+    return pd.DataFrame(
+        [
+            {"poliza": "P1", "forma_pago": "M", "razon_social": "ASISA PARTICULARES"},
+            {"poliza": "P2", "forma_pago": "M", "razon_social": "ASISA PARTICULARES"},
+        ]
+    )
+
+
+def _df_facturacion_eiac_parcial():
+    return pd.DataFrame(
+        [
+            # Enero: 100% EIAC (caso real: marzo 2026, sin ninguna fila oficial).
+            {"poliza": "P1", "periodo_liquidacion": "2026-01", "prima_neta": 30.0,
+             "fecha_desde": "2026-01-01", "cartera": "EIAC"},
+            # Febrero: mezcla EIAC + oficial -> ya NO es "solo EIAC".
+            {"poliza": "P2", "periodo_liquidacion": "2026-02", "prima_neta": 40.0,
+             "fecha_desde": "2026-02-01", "cartera": "ASISTENCIA SANITARIA"},
+        ]
+    )
+
+
+def test_es_eiac_parcial_true_cuando_todo_el_periodo_es_eiac(contrato):
+    resultado = calcular_objetivo_anual(
+        _df_polizas_eiac_parcial(), _df_facturacion_eiac_parcial(), contrato, anio=2026, mes_hasta=2
+    )
+    mes_enero = next(m for m in resultado.meses if m.periodo == "2026-01")
+    assert mes_enero.es_eiac_parcial is True
+    assert mes_enero.completo is True  # sí cruza con Pólizas, pero sigue siendo solo-EIAC
+    assert resultado.meses_eiac_parcial == ["2026-01"]
+
+
+def test_es_eiac_parcial_false_cuando_hay_alguna_fila_oficial(contrato):
+    resultado = calcular_objetivo_anual(
+        _df_polizas_eiac_parcial(), _df_facturacion_eiac_parcial(), contrato, anio=2026, mes_hasta=2
+    )
+    mes_febrero = next(m for m in resultado.meses if m.periodo == "2026-02")
+    assert mes_febrero.es_eiac_parcial is False
+    assert "2026-02" not in resultado.meses_eiac_parcial
+
+
+def test_es_eiac_parcial_false_sin_columna_cartera(contrato):
+    # Sin columna 'cartera' (CSV oficial de verdad, o fixtures antiguas) no
+    # se puede distinguir el origen -> se asume oficial, nunca EIAC-parcial.
+    resultado = calcular_objetivo_anual(_df_polizas(), _df_facturacion(), contrato, anio=2026, mes_hasta=2)
+    assert resultado.meses_eiac_parcial == []

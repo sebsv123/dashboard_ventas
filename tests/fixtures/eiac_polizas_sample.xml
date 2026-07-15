@@ -11,6 +11,12 @@
       <ClasePoliza>NP</ClasePoliza>
       <DatosPoliza>
         <IdPoliza>0001234-9876541</IdPoliza>
+        <CodigoEntidad>
+          <CodigoInterno>Asisa</CodigoInterno>
+        </CodigoEntidad>
+        <DatosRamo>
+          <DescripcionRamo>Asistencia sanitaria</DescripcionRamo>
+        </DatosRamo>
       </DatosPoliza>
       <Fechas>
         <FechaEfectoInicial>2026-06-01T00:00:00</FechaEfectoInicial>

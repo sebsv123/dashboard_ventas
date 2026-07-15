@@ -129,6 +129,8 @@ CREATE TABLE IF NOT EXISTS eiac_polizas (
     fecha_efecto_inicial TEXT,
     fecha_emision TEXT,
     descripcion_riesgo TEXT,
+    descripcion_ramo TEXT,            -- p.ej. "Asistencia sanitaria" -- señal de Salud/Vida
+    codigo_entidad_interno TEXT,      -- p.ej. "Asisa" -- segunda señal de Salud/Vida
     fecha_import TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(id_poliza)
 );
@@ -225,4 +227,6 @@ def inicializar_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
     _asegurar_columna(conn, "polizas", "origen", "TEXT DEFAULT 'ASISA_CSV'")
     _asegurar_columna(conn, "polizas", "nota_origen", "TEXT")
+    _asegurar_columna(conn, "eiac_polizas", "descripcion_ramo", "TEXT")
+    _asegurar_columna(conn, "eiac_polizas", "codigo_entidad_interno", "TEXT")
     conn.commit()

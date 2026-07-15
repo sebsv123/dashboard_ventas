@@ -9,6 +9,7 @@ from engine.comisiones import (
     TIPO_SALUD_MENSUAL,
     estimar_comision_poliza,
     evaluar_historial_ajustes_poliza,
+    refinar_confianza_producto_asumido,
     refinar_confianza_salud_mensual,
     resumen_historial_ajustes_cartera,
 )
@@ -200,3 +201,26 @@ def test_resumen_historial_ajustes_cartera_vacia_no_revienta(contrato):
     assert resumen.total_salud_mensual == 0
     assert resumen.con_historial_irregular == 0
     assert resumen.pct_irregular is None
+
+
+# --- refinar_confianza_producto_asumido -------------------------------------
+
+def test_refinar_confianza_producto_asumido_baja_a_baja_con_nota(contrato):
+    fila = _fila_salud_mensual("64226440", date(2026, 7, 1))
+    estimacion = estimar_comision_poliza(fila, contrato, prima_anual=1778.40)
+    assert estimacion.confianza == "media"  # confianza inicial del motor genérico
+
+    refinada = refinar_confianza_producto_asumido(estimacion, razon_social_asumida=True)
+    assert refinada.confianza == "baja"
+    assert "Producto exacto no confirmado" in refinada.nota
+    assert "ASISA Particulares" in refinada.nota
+    # El importe no cambia, solo confianza/nota.
+    assert refinada.comision_bruta_estimada == estimacion.comision_bruta_estimada
+
+
+def test_refinar_confianza_producto_asumido_no_toca_cuando_no_es_asumido(contrato):
+    fila = _fila_salud_mensual("70000001", date(2026, 6, 1))
+    estimacion = estimar_comision_poliza(fila, contrato, prima_anual=360.0)
+
+    refinada = refinar_confianza_producto_asumido(estimacion, razon_social_asumida=False)
+    assert refinada == estimacion

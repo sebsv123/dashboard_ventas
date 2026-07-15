@@ -7,7 +7,12 @@
      los 8 ficheros reales), así que no son una invención. DescripcionRiesgo
      usa nombres ya compartidos en la conversación para 2 de los 5 (Cristina
      Romero Alpuente; Residents/María Eliana Valdés Manríquez); para las
-     otras 3 no se dio nombre, así que se deja vacío en vez de inventarlo. -->
+     otras 3 no se dio nombre, así que se deja vacío en vez de inventarlo.
+
+     CodigoEntidad/CodigoInterno="Asisa" y DescripcionRamo="Asistencia
+     sanitaria" SÍ están confirmados con datos reales (vistos directamente
+     en el XML real de 64226440; las otras 4 pertenecen a la misma entidad
+     Salud, no Vida, consistente con el resto de esta conversación). -->
 <ProcesosEIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC">
   <Objetos>
     <Poliza>
@@ -15,6 +20,12 @@
       <ClasePoliza>NP</ClasePoliza>
       <DatosPoliza>
         <IdPoliza>24300-64174100</IdPoliza>
+        <CodigoEntidad>
+          <CodigoInterno>Asisa</CodigoInterno>
+        </CodigoEntidad>
+        <DatosRamo>
+          <DescripcionRamo>Asistencia sanitaria</DescripcionRamo>
+        </DatosRamo>
       </DatosPoliza>
       <Fechas>
         <FechaEfectoInicial>2026-06-30T00:00:00</FechaEfectoInicial>
@@ -25,6 +36,12 @@
       <ClasePoliza>NP</ClasePoliza>
       <DatosPoliza>
         <IdPoliza>24300-64201679</IdPoliza>
+        <CodigoEntidad>
+          <CodigoInterno>Asisa</CodigoInterno>
+        </CodigoEntidad>
+        <DatosRamo>
+          <DescripcionRamo>Asistencia sanitaria</DescripcionRamo>
+        </DatosRamo>
       </DatosPoliza>
       <Fechas>
         <FechaEfectoInicial>2026-06-30T00:00:00</FechaEfectoInicial>
@@ -35,6 +52,12 @@
       <ClasePoliza>NP</ClasePoliza>
       <DatosPoliza>
         <IdPoliza>24300-64226440</IdPoliza>
+        <CodigoEntidad>
+          <CodigoInterno>Asisa</CodigoInterno>
+        </CodigoEntidad>
+        <DatosRamo>
+          <DescripcionRamo>Asistencia sanitaria</DescripcionRamo>
+        </DatosRamo>
       </DatosPoliza>
       <Fechas>
         <FechaEfectoInicial>2026-07-01T00:00:00</FechaEfectoInicial>
@@ -45,6 +68,12 @@
       <ClasePoliza>NP</ClasePoliza>
       <DatosPoliza>
         <IdPoliza>24300-64261922</IdPoliza>
+        <CodigoEntidad>
+          <CodigoInterno>Asisa</CodigoInterno>
+        </CodigoEntidad>
+        <DatosRamo>
+          <DescripcionRamo>Asistencia sanitaria</DescripcionRamo>
+        </DatosRamo>
       </DatosPoliza>
       <Fechas>
         <FechaEfectoInicial>2026-07-07T00:00:00</FechaEfectoInicial>
@@ -61,6 +90,12 @@
       <ClasePoliza>NP</ClasePoliza>
       <DatosPoliza>
         <IdPoliza>24848-64276918</IdPoliza>
+        <CodigoEntidad>
+          <CodigoInterno>Asisa</CodigoInterno>
+        </CodigoEntidad>
+        <DatosRamo>
+          <DescripcionRamo>Asistencia sanitaria</DescripcionRamo>
+        </DatosRamo>
       </DatosPoliza>
       <Fechas>
         <FechaEfectoInicial>2026-07-01T00:00:00</FechaEfectoInicial>

@@ -50,11 +50,20 @@ cada campo DENTRO de `<Poliza>`/`<Recibo>`:
 
 AVISO sobre ClasePoliza: en los ficheros reales, `ClasePoliza` es un
 código de TRANSACCIÓN (NP/SU/AN/...), NO indica el ramo del producto
-(salud/vida) como se asumió al principio. La distinción salud/vida
-probablemente viene del NOMBRE del fichero ("EIAC-ENV-RECI-Asisa-..." vs
-"EIAC-ENV-RECI-Asisa Vida-...", confirmado con ficheros reales de ambos
-tipos) — pero eso todavía no se usa en ningún sitio de este módulo; lo
-dejamos documentado para la próxima vez que haga falta distinguir Vida.
+(salud/vida) como se asumió al principio. La distinción salud/vida SÍ
+está disponible, pero en otros dos campos, ambos dentro de `<DatosPoliza>`:
+
+  <DatosPoliza>
+    <CodigoEntidad>
+      <CodigoInterno>Asisa</CodigoInterno>   (confirmado real: "Asisa" en
+                                               pólizas de Salud; el valor
+                                               para Vida aún no se ha visto
+                                               en ningún fichero real)
+    <DatosRamo>
+      <DescripcionRamo>Asistencia sanitaria</DescripcionRamo>  (confirmado
+                                               real, señal fuerte de Salud)
+
+Ver `engine.eiac_integracion._es_salud_por_ramo` para cómo se usan.
 
 DECISIÓN DE DISEÑO — por qué se guarda en tablas propias, NO directamente
 en `polizas`/`facturacion`: `IdPoliza` aquí tiene el formato
@@ -115,6 +124,7 @@ _TARJETA = {"TA"}
 COLUMNAS_POLIZAS = [
     "id_poliza", "cliente_codigo", "numero_poliza", "situacion_poliza",
     "clase_poliza", "fecha_efecto_inicial", "fecha_emision", "descripcion_riesgo",
+    "descripcion_ramo", "codigo_entidad_interno",
 ]
 
 COLUMNAS_POLIZAS_RIESGOS = [
@@ -284,6 +294,8 @@ def parsear_eiac_polizas(path: str | Path) -> pd.DataFrame:
                 "fecha_efecto_inicial": _fecha(poliza, "Fechas/FechaEfectoInicial"),
                 "fecha_emision": _fecha(poliza, "Fechas/FechaEmision"),
                 "descripcion_riesgo": _riesgo_principal(poliza),
+                "descripcion_ramo": _texto(poliza, "DatosPoliza/DatosRamo/DescripcionRamo"),
+                "codigo_entidad_interno": _texto(poliza, "DatosPoliza/CodigoEntidad/CodigoInterno"),
             }
         )
 

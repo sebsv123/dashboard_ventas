@@ -87,21 +87,40 @@ def cargar_polizas(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
 
 
 def cargar_polizas_provisionales_eiac(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
-    """Inserta pólizas PROVISIONALES (origen='EIAC') solo si el número de
-    póliza no existe todavía — a propósito con INSERT OR IGNORE, nunca
-    sobreescribe una fila ya presente (oficial o provisional). Ver
-    `engine.eiac_integracion.construir_polizas_provisionales_desde_eiac`.
+    """Inserta pólizas PROVISIONALES (origen='EIAC'), o ACTUALIZA una fila
+    provisional ya existente si llegan mejores datos de EIAC (p.ej. el
+    ramo/entidad, que ahora permite asumir un % de comisión por defecto
+    donde antes no se podía) — pero nunca toca una fila ya OFICIAL: la
+    cláusula `WHERE origen = 'EIAC'` bloquea el UPDATE si la fila que ya
+    hay en `polizas` viene del CSV (`ON CONFLICT ... DO UPDATE` con WHERE
+    que no se cumple no actualiza nada, mismo patrón que
+    `cargar_eiac_recibos` usa para la prioridad CO > PE).
     """
-    filas_insertadas = 0
+    filas_actualizadas = 0
     cur = conn.cursor()
     for _, r in df.iterrows():
         cur.execute(
             """
-            INSERT OR IGNORE INTO polizas
+            INSERT INTO polizas
                 (poliza, cliente_codigo, razon_social, producto_base, producto_codigo,
                  fecha_emision, fecha_efecto, fecha_baja, forma_pago, situacion,
                  provincia_tomador, delegacion, nombre_tomador, origen, nota_origen)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(poliza) DO UPDATE SET
+                cliente_codigo=excluded.cliente_codigo,
+                razon_social=excluded.razon_social,
+                producto_base=excluded.producto_base,
+                producto_codigo=excluded.producto_codigo,
+                fecha_emision=excluded.fecha_emision,
+                fecha_efecto=excluded.fecha_efecto,
+                fecha_baja=excluded.fecha_baja,
+                forma_pago=excluded.forma_pago,
+                situacion=excluded.situacion,
+                provincia_tomador=excluded.provincia_tomador,
+                delegacion=excluded.delegacion,
+                nombre_tomador=excluded.nombre_tomador,
+                nota_origen=excluded.nota_origen
+            WHERE origen = 'EIAC'
             """,
             (
                 r["poliza"], r["cliente_codigo"], r["razon_social"], r["producto_base"],
@@ -111,9 +130,9 @@ def cargar_polizas_provisionales_eiac(conn: sqlite3.Connection, df: pd.DataFrame
                 r["delegacion"], r["nombre_tomador"], r["origen"], r["nota_origen"],
             ),
         )
-        filas_insertadas += cur.rowcount
+        filas_actualizadas += cur.rowcount
     conn.commit()
-    return filas_insertadas
+    return filas_actualizadas
 
 
 def cargar_liquidacion(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
@@ -149,8 +168,9 @@ def cargar_eiac_polizas(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
             """
             INSERT INTO eiac_polizas
                 (id_poliza, cliente_codigo, numero_poliza, situacion_poliza,
-                 clase_poliza, fecha_efecto_inicial, fecha_emision, descripcion_riesgo)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 clase_poliza, fecha_efecto_inicial, fecha_emision, descripcion_riesgo,
+                 descripcion_ramo, codigo_entidad_interno)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id_poliza) DO UPDATE SET
                 cliente_codigo=excluded.cliente_codigo,
                 numero_poliza=excluded.numero_poliza,
@@ -158,12 +178,15 @@ def cargar_eiac_polizas(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
                 clase_poliza=excluded.clase_poliza,
                 fecha_efecto_inicial=excluded.fecha_efecto_inicial,
                 fecha_emision=excluded.fecha_emision,
-                descripcion_riesgo=excluded.descripcion_riesgo
+                descripcion_riesgo=excluded.descripcion_riesgo,
+                descripcion_ramo=excluded.descripcion_ramo,
+                codigo_entidad_interno=excluded.codigo_entidad_interno
             """,
             (
                 r["id_poliza"], r["cliente_codigo"], r["numero_poliza"], r["situacion_poliza"],
                 r["clase_poliza"], _fecha_a_texto(r["fecha_efecto_inicial"]),
                 _fecha_a_texto(r["fecha_emision"]), r["descripcion_riesgo"],
+                r["descripcion_ramo"], r["codigo_entidad_interno"],
             ),
         )
         filas_insertadas += 1
