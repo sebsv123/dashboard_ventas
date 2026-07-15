@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from engine.calibracion import calcular_calibracion
+from engine.calibracion import calcular_calibracion, estimar_comision_y_rappel_periodo
 from engine.comisiones import aplicar_retencion, estimar_comision_poliza
 from engine.config_contrato import cargar_contrato
 from engine.rappel import calcular_rappel_inicial
@@ -144,3 +144,64 @@ def test_sin_ninguna_poliza_excluye_todos_los_periodos_reales(contrato):
     assert resultado.periodos == []
     motivos = {e.periodo: e.motivo for e in resultado.excluidos}
     assert "No hay ninguna Póliza cargada" in motivos["2026-01"]
+
+
+# --- estimar_comision_y_rappel_periodo --------------------------------------
+
+def _fusion_altas_enero():
+    # Mismo caso que _df_polizas()/_df_facturacion() para enero: P1 (salud
+    # anual, 500€) + P2 (vida mensual, recibo 12€/mes).
+    return pd.DataFrame(
+        [
+            {"poliza": "P1", "forma_pago": "A", "razon_social": "ASISA PARTICULARES",
+             "fecha_efecto": date(2026, 1, 10), "prima_neta": 500.0},
+            {"poliza": "P2", "forma_pago": "M", "razon_social": "ASISA VIDA TRANQUILIDAD",
+             "fecha_efecto": date(2026, 1, 12), "prima_neta": 12.0},
+        ]
+    )
+
+
+def test_estimar_comision_y_rappel_periodo_desglose_completo(contrato):
+    resultado = estimar_comision_y_rappel_periodo(_fusion_altas_enero(), contrato, "2026-01")
+
+    est_p1 = estimar_comision_poliza(
+        pd.Series({"poliza": "P1", "forma_pago": "A", "razon_social": "ASISA PARTICULARES",
+                   "fecha_efecto": date(2026, 1, 10)}),
+        contrato, prima_anual=500.0, fecha_referencia=date(2026, 1, 1),
+    )
+    est_p2 = estimar_comision_poliza(
+        pd.Series({"poliza": "P2", "forma_pago": "M", "razon_social": "ASISA VIDA TRANQUILIDAD",
+                   "fecha_efecto": date(2026, 1, 12)}),
+        contrato, prima_anual=144.0, prima_recibo_mensual=12.0, fecha_referencia=date(2026, 1, 1),
+    )
+    comision_bruta_esperada = round(est_p1.comision_bruta_estimada + est_p2.comision_bruta_estimada, 2)
+    rappel_esperado = calcular_rappel_inicial(
+        contrato, fecha_referencia=date(2026, 1, 1), produccion_mes_salud=500.0
+    )
+
+    assert resultado.periodo == "2026-01"
+    assert resultado.produccion_salud == pytest.approx(500.0)  # solo salud, vida excluida
+    assert resultado.comision_bruta == pytest.approx(comision_bruta_esperada)
+    assert resultado.rappel.importe == pytest.approx(rappel_esperado.importe)
+    assert resultado.total_bruto == pytest.approx(
+        round(comision_bruta_esperada + rappel_esperado.importe, 2)
+    )
+    assert resultado.total_neto == pytest.approx(
+        aplicar_retencion(comision_bruta_esperada + rappel_esperado.importe, contrato)
+    )
+
+
+def test_estimar_comision_y_rappel_periodo_neto_aplica_retencion_configurada(contrato):
+    resultado = estimar_comision_y_rappel_periodo(_fusion_altas_enero(), contrato, "2026-01")
+    # Retención actual del YAML: 15%. Comprobación directa, no solo vía aplicar_retencion,
+    # para detectar si algún día cambia el % en config/contrato.yaml sin darse cuenta.
+    assert contrato.retencion_irpf == pytest.approx(0.15)
+    assert resultado.total_neto == pytest.approx(round(resultado.total_bruto * 0.85, 2))
+
+
+def test_estimar_comision_y_rappel_periodo_sin_altas_da_todo_cero(contrato):
+    resultado = estimar_comision_y_rappel_periodo(pd.DataFrame(columns=["poliza"]), contrato, "2026-04")
+    assert resultado.produccion_salud == 0.0
+    assert resultado.comision_bruta == 0.0
+    assert resultado.total_bruto == resultado.rappel.importe
+    assert resultado.total_neto == aplicar_retencion(resultado.rappel.importe, contrato)

@@ -30,7 +30,7 @@ import pandas as pd
 from engine.comisiones import aplicar_retencion, estimar_comision_poliza
 from engine.config_contrato import ContratoConfig
 from engine.insights import primeras_altas_por_periodo
-from engine.rappel import calcular_rappel_inicial
+from engine.rappel import ResultadoRappelInicial, calcular_rappel_inicial
 from engine.reconciliacion import DiferenciaEstimadoVsReal, comparar_estimado_vs_real
 
 
@@ -61,9 +61,36 @@ class ResultadoCalibracion:
         return round(sum(pcts) / len(pcts), 1)
 
 
-def _estimar_total_periodo(
-    df_polizas: pd.DataFrame, fusion_altas: pd.DataFrame, contrato: ContratoConfig, periodo: str
-) -> float:
+@dataclass
+class EstimacionPeriodo:
+    """Estimación completa de un periodo: comisión bruta + rappel + neto.
+
+    Es LA función que usan Calibración, Vista rápida y Rappel para "lo que
+    el motor estimaría" de un periodo — cualquier cambio en la fórmula
+    (qué cuenta como producción, cómo se calcula la comisión o el rappel,
+    la retención aplicada) debe pasar por aquí, no duplicarse en cada
+    pestaña.
+    """
+
+    periodo: str
+    produccion_salud: float
+    comision_bruta: float
+    rappel: ResultadoRappelInicial
+    total_bruto: float
+    total_neto: float
+
+
+def estimar_comision_y_rappel_periodo(
+    fusion_altas: pd.DataFrame, contrato: ContratoConfig, periodo: str
+) -> EstimacionPeriodo:
+    """Estima comisión bruta + rappel + total neto de un periodo.
+
+    `fusion_altas` es el resultado de cruzar las primeras altas del
+    periodo (`engine.insights.primeras_altas_por_periodo`, filtrado por
+    `periodo_liquidacion`) con Pólizas por número de póliza — debe traer
+    ya las columnas de Pólizas (fecha_efecto, forma_pago, razon_social,
+    poliza) además de `prima_neta` de Facturación.
+    """
     anio, mes = (int(x) for x in periodo.split("-"))
     fecha_ref = date(anio, mes, 1)
 
@@ -81,7 +108,17 @@ def _estimar_total_periodo(
             produccion_salud += prima_anual
 
     rappel = calcular_rappel_inicial(contrato, fecha_referencia=fecha_ref, produccion_mes_salud=produccion_salud)
-    return aplicar_retencion(comision_bruta_total + rappel.importe, contrato)
+    total_bruto = comision_bruta_total + rappel.importe
+    total_neto = aplicar_retencion(total_bruto, contrato)
+
+    return EstimacionPeriodo(
+        periodo=periodo,
+        produccion_salud=round(produccion_salud, 2),
+        comision_bruta=round(comision_bruta_total, 2),
+        rappel=rappel,
+        total_bruto=round(total_bruto, 2),
+        total_neto=total_neto,
+    )
 
 
 def calcular_calibracion(
@@ -142,7 +179,7 @@ def calcular_calibracion(
             )
             continue
 
-        estimaciones[periodo] = _estimar_total_periodo(df_polizas, fusion, contrato, periodo)
+        estimaciones[periodo] = estimar_comision_y_rappel_periodo(fusion, contrato, periodo).total_neto
         reales[periodo] = real_total
 
     diferencias = comparar_estimado_vs_real(estimaciones, reales)
