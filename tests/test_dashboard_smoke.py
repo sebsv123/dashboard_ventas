@@ -16,14 +16,27 @@ import sqlite3
 from datetime import date
 from pathlib import Path
 
+import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
-from db.carga import cargar_facturacion, cargar_factura_pdf, cargar_liquidacion, cargar_polizas
+from db.carga import (
+    cargar_eiac_polizas,
+    cargar_eiac_recibos,
+    cargar_facturacion,
+    cargar_factura_pdf,
+    cargar_liquidacion,
+    cargar_polizas,
+)
 from db.schema import inicializar_schema
+from ingestion.eiac_xml import parsear_eiac_polizas, parsear_eiac_recibos
 from ingestion.facturacion import parsear_facturacion
 from ingestion.liquidacion import parsear_liquidacion
 from ingestion.polizas import parsear_polizas
+
+
+def _valor_a_float(texto: str) -> float:
+    return float(texto.replace(" €", "").replace(",", ""))
 
 APP_PATH = Path(__file__).parent.parent / "src" / "dashboard" / "app.py"
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -57,6 +70,64 @@ class _FacturaPdfFalsa:
             "irpf": irpf,
             "base_factura": base_factura,
         }
+
+
+def _sumar_meses(anio: int, mes: int, n: int) -> tuple[int, int]:
+    total = anio * 12 + (mes - 1) + n
+    return total // 12, total % 12 + 1
+
+
+def _eiac_polizas_xml(id_poliza: str, fecha_efecto_iso: str) -> str:
+    # Estructura real confirmada (ver ingestion.eiac_xml): IdPoliza vive en
+    # DatosPoliza, las fechas en Fechas -- sin bloques de datos personales,
+    # que el parser no lee.
+    return f"""<?xml version="1.0" encoding="ISO-8859-15"?>
+<ProcesosEIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC">
+  <Objetos>
+    <Poliza>
+      <SituacionPoliza>EV</SituacionPoliza>
+      <ClasePoliza>NP</ClasePoliza>
+      <DatosPoliza>
+        <IdPoliza>{id_poliza}</IdPoliza>
+      </DatosPoliza>
+      <Fechas>
+        <FechaEfectoInicial>{fecha_efecto_iso}T00:00:00</FechaEfectoInicial>
+      </Fechas>
+    </Poliza>
+  </Objetos>
+</ProcesosEIAC>
+"""
+
+
+def _eiac_recibos_xml(id_poliza: str, fecha_efecto_iso: str, prima_total: str, prima_neta: str) -> str:
+    return f"""<?xml version="1.0" encoding="ISO-8859-15"?>
+<ProcesosEIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC">
+  <Objetos>
+    <Recibo>
+      <DatosPoliza>
+        <IdPoliza>{id_poliza}</IdPoliza>
+      </DatosPoliza>
+      <DatosRecibo>
+        <SituacionRecibo>CO</SituacionRecibo>
+        <Fechas>
+          <FechaEfectoInicial>{fecha_efecto_iso}T00:00:00</FechaEfectoInicial>
+        </Fechas>
+        <GestionCobro>
+          <DatosFormaPago>
+            <ClaseFormaPago>CC</ClaseFormaPago>
+          </DatosFormaPago>
+        </GestionCobro>
+        <DatosImportes>
+          <Importes>
+            <PrimaTotal>{prima_total}</PrimaTotal>
+            <PrimaNeta>{prima_neta}</PrimaNeta>
+          </Importes>
+        </DatosImportes>
+      </DatosRecibo>
+    </Recibo>
+  </Objetos>
+</ProcesosEIAC>
+"""
 
 
 def _nueva_db(tmp_path, nombre) -> Path:
@@ -342,3 +413,146 @@ def test_tab_irpf_suma_retenciones_de_2_meses_y_2_entidades(tmp_path, monkeypatc
     metricas = {m.label: m.value for m in at.metric}
     etiqueta_total = next(k for k in metricas if k.startswith("Total retenido en"))
     assert metricas[etiqueta_total] == "698.90 €"  # 310.94+1.07+367.57+19.32
+
+
+def test_vista_rapida_muestra_comision_bruta_bruto_y_neto(tmp_path, monkeypatch):
+    """Tarea 1: además de Producción/Rappel, Vista rápida (y Rappel) deben
+    mostrar Comisión bruta estimada, Total bruto y Total NETO — reutilizando
+    estimar_comision_y_rappel_periodo, no una fórmula aparte. No se
+    hardcodea el rappel esperado (depende del tramo, que avanza con el
+    tiempo real desde el inicio de contrato) — sí se comprueba la relación
+    aritmética entre las 3 cifras nuevas.
+    """
+    hoy = date.today()
+    periodo_actual = f"{hoy.year:04d}-{hoy.month:02d}"
+    fecha_efecto_mes_actual = f"01/{hoy.month:02d}/{hoy.year:04d}"
+
+    polizas_csv = tmp_path / "polizas_comision.csv"
+    polizas_csv.write_text(
+        "AGENTE;ORDEN NIF;NOMBRE AGENTE;CLIENTE;RAZON SOCIAL;POLIZA;ORDEN;PRODUCTO BASE;"
+        "PRODUCTO;FECHA GRAB;FECHA ALTA;FECHA BAJA;FORMA PAGO;SITUACION POLIZA;"
+        "INDICADOR DE FACTURACION;NIF TOMADOR;NOMBRE TOMADOR;PRIMER APELLIDO TOMADOR;"
+        "SEGUNDO APELLIDO TOMADOR;DIRECCION TOMADOR;C  POSTAL TOMADOR;POBLACION TOMADOR;"
+        "PROVINCIA TOMADOR;TELEFONO TOMADOR;F  NACIMIENTO TOMADOR;NIF ASEGURADO;"
+        "NOMBRE ASEGURADO;PRIMER APELLIDO ASEGURADO;SEGUNDO APELLIDO ASEGURADO;"
+        "DIRECCION ASEGURADO;C  POSTAL ASEGURADO;POBLACION ASEGURADO;PROVINCIA ASEGURADO;"
+        "TELEFONO ASEGURADO;F  NACIMIENTOASEGURADO;DELEGACION;DESCRIPCION;PER  LIQUIDACION;"
+        "SUBAGENTE\n"
+        f"00000000X;0;AGENTE PRUEBA;90300;ASISA PARTICULARES;64300002;0;"
+        f"ASISTENCIA SANITARIA;101049;{fecha_efecto_mes_actual};{fecha_efecto_mes_actual};"
+        f"01/01/1900;M;A;S;X0000300A;NOMBRE;APELLIDO1;APELLIDO2;Calle Real 1;28000;MADRID;"
+        f"Madrid;+34600000300;01/01/1990;X0000300A;NOMBRE;APELLIDO1;APELLIDO2;Calle Real 1;"
+        f"28000;MADRID;Madrid;+34600000300;01/01/1990;2800;MADRID;{periodo_actual};\n",
+        encoding="utf-8",
+    )
+    facturacion_csv = tmp_path / "facturacion_comision.csv"
+    facturacion_csv.write_text(
+        "CLIENTE;CARTERA;OPERACION;POLIZA;NOMBRE CLIENTE;FECHA DESDE;FECHA HASTA;"
+        "PRIMA NETA;PRIMA TOTAL;PER. LIQUIDACION\n"
+        f"90300;ASISTENCIA SANITARIA;CARTERA;64300002;ASISA PARTICULARES;"
+        f"{fecha_efecto_mes_actual};{fecha_efecto_mes_actual};40,00;40,10;{periodo_actual}\n",
+        encoding="utf-8",
+    )
+
+    db_path, conn = _nueva_db(tmp_path, "comision_bruta.db")
+    cargar_polizas(conn, parsear_polizas(polizas_csv))
+    cargar_facturacion(conn, parsear_facturacion(facturacion_csv))
+    conn.close()
+
+    at = _correr_app(db_path, monkeypatch)
+    assert at.exception == []
+
+    metricas = {m.label: m.value for m in at.metric}
+    assert _valor_a_float(metricas["Producción detectada"]) == pytest.approx(480.0)
+
+    comision_bruta = _valor_a_float(metricas["Comisión bruta estimada"])
+    rappel = _valor_a_float(metricas["Rappel estimado"])
+    total_bruto = _valor_a_float(metricas["Total bruto (comisión + rappel)"])
+    total_neto = _valor_a_float(metricas["💰 Total NETO estimado"])
+
+    # ASISA PARTICULARES, primer año: 25% de producción (config/contrato.yaml).
+    assert comision_bruta == pytest.approx(480.0 * 0.25)
+    assert total_bruto == pytest.approx(round(comision_bruta + rappel, 2))
+    # Retención IRPF actual del YAML: 15%.
+    assert total_neto == pytest.approx(round(total_bruto * 0.85, 2))
+
+
+def test_produccion_confirmada_meses_futuros_aparece_con_datos_eiac(tmp_path, monkeypatch):
+    """Tarea 3: un periodo más allá del mes siguiente con producción
+    detectada (típicamente EIAC, adelantándose al CSV oficial) debe
+    aparecer en un bloque "Producción confirmada — meses futuros" dentro
+    de Vista rápida — caso real: póliza con efecto en septiembre.
+    """
+    hoy = date.today()
+    anio_futuro, mes_futuro = _sumar_meses(hoy.year, hoy.month, 4)
+    periodo_futuro = f"{anio_futuro:04d}-{mes_futuro:02d}"
+    fecha_efecto_futura = f"{anio_futuro:04d}-{mes_futuro:02d}-01"
+
+    eiac_polizas_xml = tmp_path / "EIAC-ENV-POLI-futuro.xml"
+    eiac_polizas_xml.write_text(
+        _eiac_polizas_xml("24300-70099001", fecha_efecto_futura), encoding="utf-8"
+    )
+    eiac_recibos_xml = tmp_path / "EIAC-ENV-RECI-futuro.xml"
+    eiac_recibos_xml.write_text(
+        _eiac_recibos_xml("24300-70099001", fecha_efecto_futura, "50.50", "50.00"), encoding="utf-8"
+    )
+
+    db_path, conn = _nueva_db(tmp_path, "meses_futuros.db")
+    cargar_eiac_polizas(conn, parsear_eiac_polizas(eiac_polizas_xml))
+    cargar_eiac_recibos(conn, parsear_eiac_recibos(eiac_recibos_xml))
+    conn.close()
+
+    at = _correr_app(db_path, monkeypatch)
+    assert at.exception == []
+
+    assert any("Producción confirmada" in md.value for md in at.markdown)
+    assert any(f"Periodo futuro · {periodo_futuro}" in md.value for md in at.markdown)
+
+    metricas = {m.label: m.value for m in at.metric}
+    # 50€ recibo, ClaseFormaPago=CC -> pista mensual -> anualizado x12 = 600€.
+    assert _valor_a_float(metricas["Producción detectada"]) == pytest.approx(600.0)
+
+
+def test_produccion_confirmada_meses_futuros_no_aparece_sin_datos(tmp_path, monkeypatch):
+    """Sin ningún periodo más allá del mes siguiente con datos, el bloque
+    de "meses futuros" no debe aparecer — nunca un hueco vacío ni un 0€
+    engañoso."""
+    db_path, conn = _nueva_db(tmp_path, "sin_meses_futuros.db")
+    cargar_facturacion(conn, parsear_facturacion(FIXTURES / "facturacion_sample.csv"))
+    conn.close()
+
+    at = _correr_app(db_path, monkeypatch)
+    assert at.exception == []
+    assert not any("Producción confirmada" in md.value for md in at.markdown)
+
+
+def test_objetivo_anual_incluye_produccion_solo_de_eiac(tmp_path, monkeypatch):
+    """Tarea 3 (segunda parte): Objetivo anual debe contar también la
+    producción que solo está en EIAC del mes en curso — antes usaba
+    df_polizas/df_facturacion "oficiales" sin conectar el canal EIAC.
+    """
+    hoy = date.today()
+    fecha_efecto_actual = f"{hoy.year:04d}-{hoy.month:02d}-01"
+
+    eiac_polizas_xml = tmp_path / "EIAC-ENV-POLI-objetivo.xml"
+    eiac_polizas_xml.write_text(
+        _eiac_polizas_xml("24300-70099002", fecha_efecto_actual), encoding="utf-8"
+    )
+    eiac_recibos_xml = tmp_path / "EIAC-ENV-RECI-objetivo.xml"
+    eiac_recibos_xml.write_text(
+        _eiac_recibos_xml("24300-70099002", fecha_efecto_actual, "101.00", "100.00"), encoding="utf-8"
+    )
+
+    db_path, conn = _nueva_db(tmp_path, "objetivo_eiac.db")
+    cargar_eiac_polizas(conn, parsear_eiac_polizas(eiac_polizas_xml))
+    cargar_eiac_recibos(conn, parsear_eiac_recibos(eiac_recibos_xml))
+    conn.close()
+
+    at = _correr_app(db_path, monkeypatch)
+    assert at.exception == []
+
+    metricas = {m.label: m.value for m in at.metric}
+    etiqueta = next(k for k in metricas if k.startswith("Producción acumulada en"))
+    # 100€ recibo, ClaseFormaPago=CC -> pista mensual -> anualizado x12 = 1.200€
+    # (único dato del año en esta BD aislada, así que el acumulado ES ese importe).
+    assert "1,200.00 €" in metricas[etiqueta]

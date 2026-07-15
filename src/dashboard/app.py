@@ -30,7 +30,7 @@ from db.carga import (
     recalcular_resumen_mensual,
 )
 from db.schema import conectar, inicializar_schema
-from engine.calibracion import calcular_calibracion
+from engine.calibracion import calcular_calibracion, estimar_comision_y_rappel_periodo
 from engine.comisiones import estimar_comision_poliza, resumen_historial_ajustes_cartera
 from engine.config_contrato import cargar_contrato
 from engine.eiac_integracion import integrar_eiac
@@ -41,6 +41,7 @@ from engine.insights import (
     construir_produccion_polizas,
     evolucion_mensual,
     hay_suficiente_historico,
+    periodos_futuros_con_datos,
     polizas_salud_mensual_historial_irregular,
     primeras_altas_por_periodo,
     ranking_productos,
@@ -50,7 +51,6 @@ from engine.insights import (
     variacion_mes_actual_vs_anterior,
 )
 from engine.proyeccion import proyectar_cierre_mes
-from engine.rappel import calcular_rappel_inicial
 from engine.reconciliacion import detectar_polizas_sin_cobrar
 from ingestion.eiac_xml import (
     detectar_tipo_eiac,
@@ -183,6 +183,89 @@ def _formatear_periodos(periodos: list[str]) -> str:
     if invalidos:
         texto = f"{texto}; {', '.join(invalidos)}" if texto else ", ".join(invalidos)
     return texto
+
+
+def _aviso_comision_sin_razon_social(fusion_periodo: pd.DataFrame) -> None:
+    """Avisa cuando parte de las altas del periodo son provisionales de
+    EIAC sin `razon_social` confirmada — `estimar_comision_poliza` no
+    puede buscar el % de comisión sin saber la entidad, así que esas
+    pólizas aportan 0€ a "Comisión bruta estimada" aunque sí tengan
+    producción. Sin este aviso, un 0€ ahí parece "no hay comisión" en vez
+    de "no se puede estimar todavía" — mismo criterio que el resto del
+    proyecto para no confundir ausencia de dato con un hecho real.
+    """
+    if fusion_periodo.empty:
+        return
+    n_sin_razon_social = int(fusion_periodo["razon_social"].isna().sum())
+    if n_sin_razon_social == 0:
+        return
+    st.warning(
+        f"⚠️ {n_sin_razon_social} alta(s) de este periodo son provisionales de "
+        "EIAC sin entidad (razon_social) confirmada todavía — no se puede "
+        "buscar su % de comisión, así que aportan 0€ a \"Comisión bruta "
+        "estimada\" aunque sí cuentan en la producción y el rappel. Se "
+        "estimará en cuanto llegue el CSV oficial de Pólizas."
+    )
+
+
+def _mostrar_bloque_produccion_periodo(periodo: str, etiqueta: str) -> None:
+    """Bloque de métricas de un periodo: producción, comisión bruta
+    estimada, rappel, total bruto y total NETO (el más destacado
+    visualmente, a propósito — es la cifra que más quiere ver Sebastián
+    de un vistazo). Usado por Vista rápida (mes actual/siguiente) y por
+    el bloque de meses futuros con datos confirmados (normalmente EIAC).
+
+    La comisión bruta reutiliza `estimar_comision_y_rappel_periodo` — el
+    mismo cálculo que ya usa la pestaña Calibración — para no mantener
+    dos fórmulas distintas de "lo que el motor estimaría" en el proyecto.
+    """
+    st.markdown(f"**{etiqueta} · {periodo}**")
+    _resumen = resumen_produccion_periodo(df_polizas_con_eiac, df_facturacion_con_eiac, contrato, periodo)
+    if not _resumen.tiene_datos:
+        st.info(
+            f"Todavía no hay datos de {periodo} — aparecerán en cuanto "
+            "subas Facturación/Pólizas con ventas de ese periodo."
+        )
+        return
+    if _resumen.polizas_detectadas == 0:
+        st.warning(
+            f"Hay recibos de {periodo} en Facturación, pero no se pudieron "
+            "cruzar con ninguna póliza todavía — sube el CSV de Pólizas "
+            "actualizado para completar este cálculo."
+        )
+        return
+
+    _altas_periodo = primeras_altas_por_periodo(df_facturacion_con_eiac)
+    _altas_periodo = _altas_periodo[_altas_periodo["periodo_liquidacion"] == periodo]
+    # Inner join, igual criterio que resumen_produccion_periodo de arriba:
+    # solo altas que sí cruzan con Pólizas, para que "Producción detectada"
+    # y el resto de cifras de este bloque partan del mismo conjunto de filas.
+    _fusion_periodo = _altas_periodo.merge(df_polizas_con_eiac, on="poliza", how="inner")
+    _estimacion = estimar_comision_y_rappel_periodo(_fusion_periodo, contrato, periodo)
+
+    cm1, cm2 = st.columns(2)
+    cm1.metric("Producción detectada", f"{_resumen.produccion_salud:,.2f} €")
+    cm2.metric(
+        "Rappel estimado",
+        f"{_estimacion.rappel.importe:,.2f} €",
+        help=_estimacion.rappel.nota,
+    )
+    cm3, cm4 = st.columns(2)
+    cm3.metric("Comisión bruta estimada", f"{_estimacion.comision_bruta:,.2f} €")
+    cm4.metric("Total bruto (comisión + rappel)", f"{_estimacion.total_bruto:,.2f} €")
+
+    st.metric(
+        "💰 Total NETO estimado",
+        f"{_estimacion.total_neto:,.2f} €",
+        help=(
+            f"Total bruto tras aplicar la retención de IRPF del "
+            f"{contrato.retencion_irpf:.0%} (config/contrato.yaml, "
+            "aplicar_retencion()). Estimación del motor — confirmar "
+            "siempre contra la Liquidación/Factura real."
+        ),
+    )
+    _aviso_comision_sin_razon_social(_fusion_periodo)
+    _mostrar_aviso_historial_irregular(periodo)
 
 
 def _mostrar_aviso_historial_irregular(periodo: str) -> None:
@@ -389,10 +472,14 @@ with st.sidebar:
         "confirma los números **reales**."
     )
 
-if df_polizas.empty and df_facturacion.empty:
+if df_polizas_con_eiac.empty and df_facturacion_con_eiac.empty:
+    # Con las versiones "_con_eiac" (no las oficiales a secas): un usuario
+    # que solo ha subido ficheros EIAC todavía (sin CSV oficial de
+    # Facturación/Pólizas) sí tiene datos que mostrar — pararía aquí en
+    # falso si comprobara solo df_polizas/df_facturacion.
     st.info(
         "Todavía no hay datos cargados. Sube al menos un fichero de "
-        "Facturación y Pólizas desde el panel lateral para empezar."
+        "Facturación y Pólizas (o EIAC) desde el panel lateral para empezar."
     )
     st.stop()
 
@@ -417,34 +504,29 @@ for _col, _periodo, _etiqueta in (
     (col_periodo_siguiente, _periodo_siguiente, "Mes siguiente"),
 ):
     with _col:
-        st.markdown(f"**{_etiqueta} · {_periodo}**")
-        _resumen = resumen_produccion_periodo(df_polizas_con_eiac, df_facturacion_con_eiac, contrato, _periodo)
-        if not _resumen.tiene_datos:
-            st.info(
-                f"Todavía no hay datos de {_periodo} — aparecerán en cuanto "
-                "subas Facturación/Pólizas con ventas de ese periodo."
-            )
-        elif _resumen.polizas_detectadas == 0:
-            st.warning(
-                f"Hay recibos de {_periodo} en Facturación, pero no se pudieron "
-                "cruzar con ninguna póliza todavía — sube el CSV de Pólizas "
-                "actualizado para completar este cálculo."
-            )
-        else:
-            _anio_p, _mes_p = (int(x) for x in _periodo.split("-"))
-            _fecha_ref_periodo = date(_anio_p, _mes_p, 1)
-            _rappel_periodo = calcular_rappel_inicial(
-                contrato, fecha_referencia=_fecha_ref_periodo,
-                produccion_mes_salud=_resumen.produccion_salud,
-            )
-            cm1, cm2 = st.columns(2)
-            cm1.metric("Producción detectada", f"{_resumen.produccion_salud:,.2f} €")
-            cm2.metric(
-                "Rappel estimado",
-                f"{_rappel_periodo.importe:,.2f} €",
-                help=_rappel_periodo.nota,
-            )
-            _mostrar_aviso_historial_irregular(_periodo)
+        _mostrar_bloque_produccion_periodo(_periodo, _etiqueta)
+
+# --- Producción confirmada más allá del mes siguiente --------------------------
+# Típicamente por EIAC, que se adelanta al CSV oficial de Facturación (caso
+# real: una póliza con FechaEfectoInicial en septiembre subida en julio). Va
+# aquí, dentro de Vista rápida y no en Objetivo anual, porque es la misma
+# idea que "mes actual/siguiente" de arriba (producción ya detectada de un
+# periodo concreto, con su rappel) — Objetivo anual es una vista acumulada
+# del año en curso hasta el mes de hoy, no está pensada para periodos
+# sueltos más allá de la fecha actual. Si no hay ningún periodo futuro con
+# datos, no se muestra nada (nunca un bloque vacío ni un 0€ engañoso).
+_periodos_futuros = periodos_futuros_con_datos(df_facturacion_con_eiac, _periodo_siguiente)
+if _periodos_futuros:
+    st.markdown("### 📅 Producción confirmada — meses futuros")
+    st.caption(
+        "Periodos más allá del mes siguiente que YA tienen alguna venta "
+        "detectada — normalmente porque llegó por EIAC antes que el CSV "
+        "oficial de Facturación/Pólizas."
+    )
+    cols_futuros = st.columns(len(_periodos_futuros))
+    for _col, _periodo in zip(cols_futuros, _periodos_futuros):
+        with _col:
+            _mostrar_bloque_produccion_periodo(_periodo, "Periodo futuro")
 
 st.divider()
 
@@ -589,24 +671,13 @@ with tab_rappel:
     # real que motivó esto (pólizas con efecto 30/06 que devengan en julio).
     altas_mes = primeras_altas_por_periodo(df_facturacion_con_eiac)
     altas_mes = altas_mes[altas_mes["periodo_liquidacion"] == mes_texto]
-    altas_mes = altas_mes.merge(
-        df_polizas_con_eiac[["poliza", "forma_pago", "razon_social"]], on="poliza", how="inner"
-    )
+    fusion_mes = altas_mes.merge(df_polizas_con_eiac, on="poliza", how="inner")
 
-    nuevas_mes_salud = altas_mes[~altas_mes["razon_social"].isin(contrato.comisiones_vida.keys())]
-    nuevas_mes_vida = altas_mes[altas_mes["razon_social"].isin(contrato.comisiones_vida.keys())]
-
-    # La prima del primer recibo (el mismo que fija el periodo) se anualiza
-    # si la póliza es mensual — ya no hace falta un lookup aparte a
-    # Facturación "por el recibo más reciente".
-    produccion_salud = 0.0
-    for _, p in nuevas_mes_salud.iterrows():
-        prima = p["prima_neta"]
-        produccion_salud += prima if p["forma_pago"] == "A" else prima * 12
-
-    resultado_rappel = calcular_rappel_inicial(
-        contrato, fecha_referencia=hoy, produccion_mes_salud=produccion_salud
-    )
+    # Misma función que Calibración y Vista rápida — no duplicar la fórmula
+    # de comisión/rappel/neto en cada pestaña (ver engine.calibracion).
+    estimacion_mes = estimar_comision_y_rappel_periodo(fusion_mes, contrato, mes_texto)
+    resultado_rappel = estimacion_mes.rappel
+    produccion_salud = estimacion_mes.produccion_salud
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Producción estimada del mes", f"{resultado_rappel.produccion_mes:,.2f} €")
@@ -617,12 +688,25 @@ with tab_rappel:
         help=resultado_rappel.nota,
     )
 
+    c4, c5, c6 = st.columns(3)
+    c4.metric("Comisión bruta estimada", f"{estimacion_mes.comision_bruta:,.2f} €")
+    c5.metric("Total bruto (comisión + rappel)", f"{estimacion_mes.total_bruto:,.2f} €")
+    c6.metric(
+        "💰 Total NETO estimado",
+        f"{estimacion_mes.total_neto:,.2f} €",
+        help=(
+            f"Total bruto tras aplicar la retención de IRPF del "
+            f"{contrato.retencion_irpf:.0%} (config/contrato.yaml)."
+        ),
+    )
+
     _n_altas_eiac = int((altas_mes["poliza"].isin(_resultado_eiac.facturacion_eiac["poliza"])).sum())
     if _n_altas_eiac:
         st.caption(
             f"📐 Incluye {_n_altas_eiac} alta(s) que solo están en EIAC todavía "
             "(sin Facturación/Pólizas oficial de este periodo)."
         )
+    _aviso_comision_sin_razon_social(fusion_mes)
 
     if resultado_rappel.confianza == "media":
         st.warning(
@@ -870,7 +954,9 @@ with tab_objetivo:
         "Suma toda la producción nueva del año natural en curso (salud "
         "mensual anualizada, salud prepago anual íntegra, y vida "
         "anualizada), usando el mismo periodo real (periodo_liquidacion) "
-        "que el resto del dashboard — no el mes calendario de fecha_efecto."
+        "que el resto del dashboard — no el mes calendario de fecha_efecto. "
+        "Incluye también las altas que solo están en EIAC todavía, igual "
+        "que Vista rápida/Rappel/Resumen."
     )
 
     _hoy_objetivo = date.today()
@@ -887,7 +973,7 @@ with tab_objetivo:
     )
 
     resultado_objetivo = calcular_objetivo_anual(
-        df_polizas, df_facturacion, contrato,
+        df_polizas_con_eiac, df_facturacion_con_eiac, contrato,
         anio=_hoy_objetivo.year, mes_hasta=_hoy_objetivo.month, objetivo=objetivo_input,
     )
 
