@@ -81,6 +81,32 @@ comisión en 0€ — marcado con `razon_social_asumida=True` para que
 `engine.calibracion.estimar_comision_y_rappel_periodo` baje la confianza
 de esa estimación a "baja" con una nota explícita, en vez de presentarla
 con la misma confianza que una póliza con producto ya confirmado.
+
+DETECCIÓN DE TRAVEL — caso real (póliza 64171931, ASISA Travel and You):
+`DatosRamo` trae un tercer campo, `RamoEntidad`, que distingue Travel de
+Salud normal de forma fiable (`RAVI` vs `RASA`, ver docstring de
+`ingestion.eiac_xml`). Como "ASISA TRAVEL AND YOU" es el único producto
+de viaje en `config/contrato.yaml` (20%/0%, muy distinto del 25%/20% de
+Particulares), esta señal se comprueba ANTES que `_es_salud_por_ramo`
+(que también detectaría esta póliza como "Salud" por su
+`CodigoEntidad/CodigoInterno="Asisa"` compartido, y asumiría el % de
+Particulares equivocado) — ver `_es_travel_por_ramo`.
+
+ANULACIÓN POR EIAC (`ClasePoliza=AN`/`SituacionPoliza=EX`) — investigado
+en julio 2026 a raíz del mismo caso real: la póliza 64171931 fue anulada
+(fichero POLI posterior, `FechaAnulacion` real) DESPUÉS de su alta
+original. Se confirmó que `situacion` SÍ se actualiza correctamente en la
+póliza provisional (el upsert de `db.carga.cargar_polizas_provisionales_eiac`
+refresca la fila mientras siga siendo `origen='EIAC'`), pero el mapeo
+`_SITUACION_EIAC_A_ASISA` no incluía "EX" — se añade aquí ("EX" -> "B",
+igual que "BJ"). El problema más importante era otro: NADA en la cadena
+de producción/comisión/rappel filtraba por `situacion` — se corrigió en
+`engine.insights.polizas_activas` y `engine.calibracion.
+estimar_comision_y_rappel_periodo`/`engine.objetivo._desglose_mes`. Para
+esta póliza en concreto el bug nunca llegó a manifestarse en pantalla
+(no tiene ningún recibo en los ficheros RECI reales, así que nunca generó
+producción ni con ni sin el fix) — pero el mecanismo general sí estaba
+roto para cualquier póliza que SÍ tuviera recibo y se anulase después.
 """
 
 from __future__ import annotations
@@ -104,15 +130,15 @@ _PISTA_A_FORMA_PAGO = {
     "posible_prepago_anual": "A",
 }
 
-# SituacionPoliza (EIAC) -> situacion (ASISA). "EV" (en vigor) -> "A" SÍ
-# está confirmado: es el único valor visto en los 8 ficheros reales de
-# Sebastián. "BJ" -> "B" sigue siendo una suposición razonable sin
-# confirmar (ninguna póliza de baja en esos 8 ficheros todavía); si el
-# código real no está aquí, se deja el código EIAC tal cual en vez de
-# forzar un valor.
+# SituacionPoliza (EIAC) -> situacion (ASISA). "EV" (en vigor) -> "A" y
+# "EX" (extinguida) -> "B" están confirmados con datos reales (caso
+# 64171931: anulación con FechaAnulacion real). "BJ" -> "B" sigue siendo
+# una suposición razonable sin confirmar todavía; si el código real no
+# está aquí, se deja el código EIAC tal cual en vez de forzar un valor.
 _SITUACION_EIAC_A_ASISA = {
     "EV": "A",
     "BJ": "B",
+    "EX": "B",
 }
 
 # Señales de Salud confirmadas con datos reales (ver docstring del
@@ -121,9 +147,19 @@ _SITUACION_EIAC_A_ASISA = {
 _TERMINOS_RAMO_SALUD = ("sanitaria", "salud")
 _CODIGOS_ENTIDAD_SALUD_CONFIRMADOS = {"asisa"}
 
+# RamoEntidad "RAVI" -- señal confirmada de Travel (caso real 64171931).
+# Ver docstring del módulo: se comprueba ANTES que _es_salud_por_ramo.
+_RAMO_ENTIDAD_TRAVEL_CONFIRMADOS = {"ravi"}
+
 # razon_social por defecto cuando se confirma Salud pero no el producto
 # exacto — el más habitual en la cartera; ver docstring del módulo.
 RAZON_SOCIAL_SALUD_POR_DEFECTO = "ASISA PARTICULARES"
+
+# razon_social cuando RamoEntidad confirma Travel — único producto de
+# viaje en config/contrato.yaml, así que aquí SÍ se sabe el producto
+# exacto (no solo la categoría), a diferencia del default de Salud de
+# arriba.
+RAZON_SOCIAL_TRAVEL = "ASISA TRAVEL AND YOU"
 
 COLUMNAS_FACTURACION_EIAC = [
     "poliza", "cliente_codigo", "cartera", "producto_nombre",
@@ -137,6 +173,15 @@ COLUMNAS_POLIZAS_PROVISIONALES = [
     "provincia_tomador", "delegacion", "nombre_tomador", "origen", "nota_origen",
     "razon_social_asumida",
 ]
+
+
+def _es_travel_por_ramo(ramo_entidad) -> bool:
+    """True si RamoEntidad confirma Travel ("RAVI") — ver docstring del
+    módulo y caso real 64171931."""
+    return (
+        isinstance(ramo_entidad, str)
+        and ramo_entidad.strip().lower() in _RAMO_ENTIDAD_TRAVEL_CONFIRMADOS
+    )
 
 
 def _es_salud_por_ramo(descripcion_ramo, codigo_entidad_interno) -> bool:
@@ -304,8 +349,19 @@ def construir_polizas_provisionales_desde_eiac(
         pista = pista_por_poliza.get(numero_poliza)
         forma_pago = _PISTA_A_FORMA_PAGO.get(pista)
 
+        es_travel = _es_travel_por_ramo(p.get("ramo_entidad"))
         es_salud = _es_salud_por_ramo(p.get("descripcion_ramo"), p.get("codigo_entidad_interno"))
-        if es_salud:
+        if es_travel:
+            razon_social = RAZON_SOCIAL_TRAVEL
+            razon_social_asumida = True
+            nota = (
+                f"Origen: EIAC (id_poliza={p['id_poliza']}), pendiente de confirmar "
+                f"con Pólizas oficial. Producto detectado como {RAZON_SOCIAL_TRAVEL} "
+                f"por RamoEntidad='{p.get('ramo_entidad')}' — único producto de viaje "
+                "en el contrato, señal inequívoca (no un default estadístico como el "
+                "de Salud)."
+            )
+        elif es_salud:
             razon_social = RAZON_SOCIAL_SALUD_POR_DEFECTO
             razon_social_asumida = True
             nota = (

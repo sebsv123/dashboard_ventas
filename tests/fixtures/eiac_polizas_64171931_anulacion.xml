@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="ISO-8859-15"?>
+<!-- Caso real: poliza 64171931 (ASISA Travel and You), fichero POSTERIOR
+     con la anulacion. Fichero real de Sebastian, 2026-06-23 - confirma
+     que <DatosAnulacion> es HERMANO de <Fechas> dentro de <Poliza>, no
+     esta anidado en ella. Nombre anonimizado, resto de campos reales. -->
+<ProcesosEIAC xmlns="http://www.tirea.es/EIAC/ProcesosEIAC">
+  <Objetos>
+    <Poliza>
+      <DetalleProceso>
+        <ClasePoliza>AN</ClasePoliza>
+        <Transaccion>OR</Transaccion>
+        <Periodo>DI</Periodo>
+        <FechaDesde>2026-06-20T00:00:00</FechaDesde>
+        <FechaHasta>2026-06-23T00:00:00</FechaHasta>
+      </DetalleProceso>
+      <DatosPoliza>
+        <IdPoliza>23165-64171931</IdPoliza>
+        <CodigoEntidad>
+          <CodigoInterno>Asisa</CodigoInterno>
+          <CodigoDGS>C0461</CodigoDGS>
+        </CodigoEntidad>
+        <DatosRamo>
+          <RamoDGS>2131</RamoDGS>
+          <RamoEntidad>RAVI</RamoEntidad>
+          <DescripcionRamo>Asistencia en viaje</DescripcionRamo>
+        </DatosRamo>
+      </DatosPoliza>
+      <SituacionPoliza>EX</SituacionPoliza>
+      <ClasePoliza>AN</ClasePoliza>
+      <DatosAnulacion>
+        <FechaAnulacion>2026-06-19T00:00:00</FechaAnulacion>
+        <MotivoAnulacion>NI</MotivoAnulacion>
+      </DatosAnulacion>
+      <Fechas>
+        <FechaSituacion>2026-06-20T00:10:28</FechaSituacion>
+        <FechaEfectoInicial>2026-06-10T00:00:00</FechaEfectoInicial>
+        <FechaEfectoActual>2026-06-10T00:00:00</FechaEfectoActual>
+        <FechaVencimiento>2026-06-19T00:00:00</FechaVencimiento>
+        <FechaFinSeguro>2026-06-19T00:00:00</FechaFinSeguro>
+        <FechaEmision>2026-06-10T00:00:00</FechaEmision>
+      </Fechas>
+      <DatosRiesgos>
+        <Riesgo>
+          <NumeroOrden>1</NumeroOrden>
+          <DescripcionRiesgo>ASEGURADO DE PRUEBA VIAJE</DescripcionRiesgo>
+          <FechaInicio>2026-06-10T00:00:00</FechaInicio>
+          <IdRiesgo>2000001</IdRiesgo>
+        </Riesgo>
+      </DatosRiesgos>
+    </Poliza>
+  </Objetos>
+</ProcesosEIAC>

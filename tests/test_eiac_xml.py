@@ -170,3 +170,28 @@ def test_detectar_tipo_eiac(nombre, esperado):
 def test_detectar_tipo_eiac_desconocido_lanza_error():
     with pytest.raises(ValueError, match="No se reconoce"):
         detectar_tipo_eiac("otro_fichero.xml")
+
+
+# --- caso real 64171931 (ASISA Travel and You): RamoEntidad + anulación ----
+
+def test_parsear_eiac_polizas_ramo_entidad_travel_caso_real_64171931():
+    df = parsear_eiac_polizas(FIXTURES / "eiac_polizas_64171931_alta.xml")
+    fila = df[df["id_poliza"] == "23165-64171931"].iloc[0]
+    assert fila["ramo_entidad"] == "RAVI"
+    assert fila["descripcion_ramo"] == "Asistencia en viaje"
+    assert fila["situacion_poliza"] == "EV"
+    assert fila["clase_poliza"] == "NP"
+    assert pd.isna(fila["fecha_anulacion"])
+
+
+def test_parsear_eiac_polizas_anulacion_caso_real_64171931():
+    # Fichero POSTERIOR real: ClasePoliza=AN, SituacionPoliza=EX, y
+    # DatosAnulacion/FechaAnulacion -- confirmado que <DatosAnulacion> es
+    # hermano de <Fechas>, no anidado dentro (ver fixture/docstring).
+    df = parsear_eiac_polizas(FIXTURES / "eiac_polizas_64171931_anulacion.xml")
+    fila = df[df["id_poliza"] == "23165-64171931"].iloc[0]
+    assert fila["situacion_poliza"] == "EX"
+    assert fila["clase_poliza"] == "AN"
+    assert fila["fecha_anulacion"] == date(2026, 6, 19)
+    assert fila["motivo_anulacion"] == "NI"
+    assert fila["ramo_entidad"] == "RAVI"

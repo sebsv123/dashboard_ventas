@@ -58,6 +58,25 @@ def primeras_altas_por_periodo(df_facturacion: pd.DataFrame) -> pd.DataFrame:
     return primeras[columnas]
 
 
+def polizas_activas(df_polizas: pd.DataFrame) -> pd.DataFrame:
+    """Filtra a `situacion == "A"` — una póliza dada de baja o anulada no
+    debe seguir sumando a producción/comisión/rappel del periodo en que se
+    vendió, aunque ese periodo ya haya quedado atrás.
+
+    Caso real que descubrió este bug (julio 2026): póliza 64171931 (ASISA
+    Travel and You), vendida y anulada por EIAC dentro del mismo mes de
+    devengo (alta 10/06/2026, `ClasePoliza=AN`/`SituacionPoliza=EX` con
+    `FechaAnulacion` 19/06/2026 en un fichero posterior) — antes de este
+    fix, nada en la cadena de producción filtraba por `situacion`. Si
+    `df_polizas` no trae la columna (fixtures/consultas antiguas que no la
+    seleccionan), se devuelve tal cual por compatibilidad — más seguro
+    contar de más en ese caso raro que reventar.
+    """
+    if df_polizas.empty or "situacion" not in df_polizas.columns:
+        return df_polizas
+    return df_polizas[df_polizas["situacion"] == "A"]
+
+
 def construir_produccion_polizas(
     df_polizas: pd.DataFrame, df_facturacion: pd.DataFrame, contrato: ContratoConfig
 ) -> pd.DataFrame:
@@ -68,13 +87,16 @@ def construir_produccion_polizas(
     fecha_efecto (ver el docstring de esa función). Una póliza sin ningún
     recibo en Facturación todavía no puede tener periodo real asignado, así
     que no aparece aquí hasta que se suba su primer recibo.
+
+    Solo pólizas activas (`situacion == "A"`, ver `polizas_activas`): una
+    anulada/baja no cuenta como producción, aunque tenga alta en el periodo.
     """
     if df_polizas.empty or df_facturacion.empty:
         return pd.DataFrame(columns=COLUMNAS_PRODUCCION)
 
     primeras_altas = primeras_altas_por_periodo(df_facturacion)
     fusion = primeras_altas.merge(
-        df_polizas[["poliza", "razon_social", "provincia_tomador", "forma_pago", "fecha_efecto"]],
+        polizas_activas(df_polizas)[["poliza", "razon_social", "provincia_tomador", "forma_pago", "fecha_efecto"]],
         on="poliza",
         how="inner",
     )
@@ -118,6 +140,9 @@ def resumen_produccion_periodo(
     "hay datos y la producción es 0" (que sería un hecho real, no ausencia
     de datos) — para no repetir la confusión de mostrar un 0€ desnudo
     donde en realidad falta subir el fichero.
+
+    Solo pólizas activas (`situacion == "A"`, ver `polizas_activas`): una
+    anulada/baja no cuenta como producción, aunque tenga alta en el periodo.
     """
     altas = primeras_altas_por_periodo(df_facturacion)
     altas = altas[altas["periodo_liquidacion"] == periodo]
@@ -128,7 +153,7 @@ def resumen_produccion_periodo(
         return ResumenPeriodoRapido(periodo, True, 0.0, 0)
 
     fusion = altas.merge(
-        df_polizas[["poliza", "forma_pago", "razon_social"]], on="poliza", how="inner"
+        polizas_activas(df_polizas)[["poliza", "forma_pago", "razon_social"]], on="poliza", how="inner"
     )
     altas_salud = fusion[~fusion["razon_social"].isin(contrato.comisiones_vida.keys())]
     produccion_salud = 0.0

@@ -266,3 +266,53 @@ def test_estimar_comision_y_rappel_periodo_sin_fusion_recibos_no_cuenta_vida_rec
     resultado = estimar_comision_y_rappel_periodo(_fusion_altas_julio_real(), contrato, "2026-07")
     assert resultado.comision_bruta == pytest.approx(1591.65, abs=0.01)
     assert resultado.total_neto == pytest.approx(2372.90, abs=0.01)
+
+
+# --- Pólizas no activas (anuladas/baja) no cuentan producción --------------
+# Investigación pedida por Sebastián (julio 2026) a raíz del caso real
+# 64171931 (ASISA Travel and You, anulada por EIAC tras su alta -- ver
+# tests/test_eiac_integracion.py). Esa póliza real no tuvo ningún recibo,
+# así que no sirve para probar el filtro de extremo a extremo aquí; estos
+# dos tests son SINTÉTICOS a propósito, para fijar el comportamiento general
+# que el código no garantizaba antes de este fix.
+
+def test_estimar_comision_y_rappel_periodo_excluye_alta_de_poliza_anulada(contrato):
+    fusion = pd.DataFrame(
+        [
+            {"poliza": "ACTIVA", "forma_pago": "A", "razon_social": "ASISA PARTICULARES",
+             "fecha_efecto": date(2026, 6, 10), "prima_neta": 500.0, "situacion": "A"},
+            {"poliza": "ANULADA", "forma_pago": "A", "razon_social": "ASISA TRAVEL AND YOU",
+             "fecha_efecto": date(2026, 6, 10), "prima_neta": 123.43, "situacion": "B"},
+        ]
+    )
+    resultado = estimar_comision_y_rappel_periodo(fusion, contrato, "2026-06")
+    # Solo ACTIVA cuenta: la anulada (situacion="B") no debe sumar ni a
+    # producción ni a comisión, aunque su alta caiga en el periodo.
+    assert resultado.produccion_salud == pytest.approx(500.0)
+    est_activa = estimar_comision_poliza(
+        pd.Series({"poliza": "ACTIVA", "forma_pago": "A", "razon_social": "ASISA PARTICULARES",
+                   "fecha_efecto": date(2026, 6, 10)}),
+        contrato, prima_anual=500.0, fecha_referencia=date(2026, 6, 1),
+    )
+    assert resultado.comision_bruta == pytest.approx(est_activa.comision_bruta_estimada)
+
+
+def test_estimar_comision_y_rappel_periodo_excluye_recibo_vida_de_poliza_anulada(contrato):
+    fusion_recibos = pd.DataFrame(
+        [
+            {"poliza": "VIDA-ANULADA", "forma_pago": "M", "razon_social": "ASISA VIDA TRANQUILIDAD",
+             "fecha_efecto": date(2026, 5, 15), "prima_neta": 28.29, "situacion": "B"},
+        ]
+    )
+    resultado = estimar_comision_y_rappel_periodo(
+        pd.DataFrame(columns=["poliza"]), contrato, "2026-07", fusion_recibos
+    )
+    assert resultado.comision_bruta == 0.0
+
+
+def test_estimar_comision_y_rappel_periodo_sin_columna_situacion_cuenta_igual_que_antes(contrato):
+    # Compatibilidad: llamadas/tests que no incluyen "situacion" (p.ej.
+    # _fusion_altas_enero() de arriba) deben seguir contando todo, igual
+    # que antes de este fix.
+    resultado = estimar_comision_y_rappel_periodo(_fusion_altas_enero(), contrato, "2026-01")
+    assert resultado.produccion_salud == pytest.approx(500.0)

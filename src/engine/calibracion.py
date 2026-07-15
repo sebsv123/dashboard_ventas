@@ -113,6 +113,21 @@ def estimar_comision_y_rappel_periodo(
     hasta este fix). Si no se pasa (`None`), la comisión Vida solo
     incluye la primera alta de cada póliza — mismo comportamiento que
     antes de este fix, para no romper llamadas que todavía no lo pasen.
+
+    PÓLIZAS NO ACTIVAS (situacion != "A") SE EXCLUYEN de producción/
+    comisión/rappel, aunque su alta o recibo caiga dentro del periodo —
+    una póliza anulada no debe seguir sumando al periodo en que se
+    vendió. Bug real encontrado en julio 2026: la póliza 64171931 (ASISA
+    Travel and You) llegó por EIAC con `ClasePoliza=AN`/
+    `SituacionPoliza=EX` (anulada, `FechaAnulacion` real) DESPUÉS de su
+    alta original — el motor no filtraba por `situacion` en ningún punto
+    de esta cadena, así que si esa póliza hubiera tenido algún recibo
+    (no lo tuvo, por eso el caso real no llegó a inflar ningún número en
+    pantalla) habría seguido contando. El filtro se hace aquí, sobre
+    `fila["situacion"]` si la columna está presente en `fusion_altas`/
+    `fusion_recibos_periodo` (viene ya incluida al fusionar con Pólizas
+    completo) — si no está presente (llamadas/tests antiguos sin esa
+    columna), se cuenta igual que antes, por compatibilidad.
     """
     anio, mes = (int(x) for x in periodo.split("-"))
     fecha_ref = date(anio, mes, 1)
@@ -120,6 +135,8 @@ def estimar_comision_y_rappel_periodo(
     comision_bruta_total = 0.0
     produccion_salud = 0.0
     for _, fila in fusion_altas.iterrows():
+        if fila.get("situacion") not in (None, "A"):
+            continue  # anulada/baja: no cuenta como producción de este periodo
         es_vida = fila["razon_social"] in contrato.comisiones_vida
         # Si se pasa fusion_recibos_periodo, Vida se calcula aparte más
         # abajo con TODOS sus recibos del periodo — no sumar aquí también
@@ -144,6 +161,8 @@ def estimar_comision_y_rappel_periodo(
             fusion_recibos_periodo["razon_social"].isin(contrato.comisiones_vida.keys())
         ]
         for _, fila in recibos_vida.iterrows():
+            if fila.get("situacion") not in (None, "A"):
+                continue  # anulada/baja: no cuenta como producción de este periodo
             prima_recibo = fila["prima_neta"]
             estimacion_vida = estimar_comision_poliza(
                 fila, contrato, prima_anual=prima_recibo * 12,

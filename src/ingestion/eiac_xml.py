@@ -65,6 +65,30 @@ está disponible, pero en otros dos campos, ambos dentro de `<DatosPoliza>`:
 
 Ver `engine.eiac_integracion._es_salud_por_ramo` para cómo se usan.
 
+RAMO TRAVEL — caso real (póliza 64171931, ASISA Travel and You, Daniella
+Valentina Salloum): dentro de `<DatosRamo>` hay un tercer campo,
+`RamoEntidad`, que para esta póliza vale "RAVI" (RamoDGS=2131,
+DescripcionRamo="Asistencia en viaje") — frente a `RamoEntidad="RASA"`
+(RamoDGS=231, "Asistencia sanitaria") en Salud normal. Como
+"ASISA TRAVEL AND YOU" es el único producto de viaje en
+`config/contrato.yaml` (20%/0%, distinto del 25%/20% de Particulares),
+`RamoEntidad="RAVI"` es una señal inequívoca — ver
+`engine.eiac_integracion._es_travel_por_ramo`.
+
+ANULACIÓN — mismo caso real: un fichero POLI posterior trajo
+`ClasePoliza=AN`, `SituacionPoliza=EX` y, DENTRO de `<Poliza>` pero como
+HERMANO de `<Fechas>` (no anidado dentro), un bloque `<DatosAnulacion>`:
+
+  <Poliza>
+    <DatosAnulacion>
+      <FechaAnulacion>       (con hora, igual que el resto de fechas EIAC)
+      <MotivoAnulacion>      (p.ej. "NI")
+    <Fechas>
+      ...
+
+Confirmado con el fichero real: `DatosAnulacion/FechaAnulacion` y
+`DatosAnulacion/MotivoAnulacion`.
+
 DECISIÓN DE DISEÑO — por qué se guarda en tablas propias, NO directamente
 en `polizas`/`facturacion`: `IdPoliza` aquí tiene el formato
 "codigo_cliente-numero_poliza" (estándar TIREA), un espacio de numeración
@@ -124,7 +148,8 @@ _TARJETA = {"TA"}
 COLUMNAS_POLIZAS = [
     "id_poliza", "cliente_codigo", "numero_poliza", "situacion_poliza",
     "clase_poliza", "fecha_efecto_inicial", "fecha_emision", "descripcion_riesgo",
-    "descripcion_ramo", "codigo_entidad_interno",
+    "descripcion_ramo", "codigo_entidad_interno", "ramo_entidad",
+    "fecha_anulacion", "motivo_anulacion",
 ]
 
 COLUMNAS_POLIZAS_RIESGOS = [
@@ -296,6 +321,9 @@ def parsear_eiac_polizas(path: str | Path) -> pd.DataFrame:
                 "descripcion_riesgo": _riesgo_principal(poliza),
                 "descripcion_ramo": _texto(poliza, "DatosPoliza/DatosRamo/DescripcionRamo"),
                 "codigo_entidad_interno": _texto(poliza, "DatosPoliza/CodigoEntidad/CodigoInterno"),
+                "ramo_entidad": _texto(poliza, "DatosPoliza/DatosRamo/RamoEntidad"),
+                "fecha_anulacion": _fecha(poliza, "DatosAnulacion/FechaAnulacion"),
+                "motivo_anulacion": _texto(poliza, "DatosAnulacion/MotivoAnulacion"),
             }
         )
 

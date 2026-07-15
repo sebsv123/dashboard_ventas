@@ -7,6 +7,7 @@ import pytest
 from engine.config_contrato import cargar_contrato
 from engine.eiac_integracion import (
     RAZON_SOCIAL_SALUD_POR_DEFECTO,
+    RAZON_SOCIAL_TRAVEL,
     construir_facturacion_desde_eiac,
     construir_polizas_provisionales_desde_eiac,
     integrar_eiac,
@@ -336,6 +337,69 @@ def test_integrar_eiac_csv_oficial_gana_periodo_e_importe_caso_real_63946797(con
     fila = altas[altas["poliza"] == "63946797"].iloc[0]
     assert fila["prima_neta"] == pytest.approx(49.59)
     assert fila["periodo_liquidacion"] == "2026-04"
+
+
+# --- caso real 64171931 (ASISA Travel and You): detección Travel + anulación
+
+def test_construir_polizas_provisionales_detecta_travel_por_ramo_entidad_caso_real():
+    # RamoEntidad="RAVI" (caso real 64171931) debe usar "ASISA TRAVEL AND
+    # YOU" (20%/0%) en vez del default de Salud (25%/20% de Particulares) --
+    # aunque CodigoEntidad/CodigoInterno="Asisa" también dispararía
+    # _es_salud_por_ramo, la señal de Travel es más específica y se
+    # comprueba primero.
+    df_polizas_eiac = parsear_eiac_polizas(FIXTURES / "eiac_polizas_64171931_alta.xml")
+    provisionales, no_reconocidos = construir_polizas_provisionales_desde_eiac(
+        df_polizas_eiac, pd.DataFrame(), pd.DataFrame()
+    )
+    assert no_reconocidos == []
+    fila = provisionales[provisionales["poliza"] == "64171931"].iloc[0]
+    assert fila["razon_social"] == RAZON_SOCIAL_TRAVEL
+    assert bool(fila["razon_social_asumida"]) is True
+    assert "RamoEntidad='RAVI'" in fila["nota_origen"]
+    assert fila["situacion"] == "A"
+
+
+def test_construir_polizas_provisionales_anulacion_actualiza_situacion_caso_real():
+    # El mismo IdPoliza llega en un fichero POSTERIOR con
+    # ClasePoliza=AN/SituacionPoliza=EX -- debe mapearse a situacion="B",
+    # no quedarse con el código EIAC crudo "EX".
+    df_polizas_eiac_anulada = parsear_eiac_polizas(FIXTURES / "eiac_polizas_64171931_anulacion.xml")
+    provisionales, _ = construir_polizas_provisionales_desde_eiac(
+        df_polizas_eiac_anulada, pd.DataFrame(), pd.DataFrame()
+    )
+    fila = provisionales[provisionales["poliza"] == "64171931"].iloc[0]
+    assert fila["situacion"] == "B"
+    # Sigue detectando Travel correctamente aunque venga del fichero de anulación.
+    assert fila["razon_social"] == RAZON_SOCIAL_TRAVEL
+
+
+def test_poliza_anulada_con_recibo_no_cuenta_produccion_del_periodo(contrato):
+    """Investigación pedida por Sebastián: ¿la producción de junio sigue
+    contando una póliza anulada por EIAC como viva?
+
+    La póliza real 64171931 NO tiene ningún recibo en los ficheros RECI
+    reales (confirmado a mano) -- así que nunca generó producción, con o
+    sin este fix. Este test es la parte SINTÉTICA (marcada explícitamente
+    como tal): simula que si hubiera tenido un recibo, antes de este fix
+    ese recibo SÍ se habría contado igual que el de cualquier póliza
+    activa -- el bug real que había que confirmar/corregir en el punto 2.
+    """
+    df_polizas_eiac_anulada = parsear_eiac_polizas(FIXTURES / "eiac_polizas_64171931_anulacion.xml")
+    provisionales, _ = construir_polizas_provisionales_desde_eiac(
+        df_polizas_eiac_anulada, pd.DataFrame(), pd.DataFrame()
+    )
+    assert provisionales.loc[provisionales["poliza"] == "64171931", "situacion"].iloc[0] == "B"
+
+    # Recibo SINTÉTICO (la póliza real no tuvo ninguno) para poder probar
+    # el filtro de producción de extremo a extremo.
+    df_facturacion = pd.DataFrame(
+        [{"poliza": "64171931", "periodo_liquidacion": "2026-06",
+          "prima_neta": 123.43, "fecha_desde": pd.Timestamp("2026-06-10")}]
+    )
+    resumen_junio = resumen_produccion_periodo(provisionales, df_facturacion, contrato, "2026-06")
+    assert resumen_junio.tiene_datos is True
+    assert resumen_junio.polizas_detectadas == 0
+    assert resumen_junio.produccion_salud == 0.0
 
 
 def test_produccion_julio_coincide_con_calculo_manual_de_los_5_casos_reales(contrato):

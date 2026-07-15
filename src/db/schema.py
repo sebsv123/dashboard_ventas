@@ -131,6 +131,9 @@ CREATE TABLE IF NOT EXISTS eiac_polizas (
     descripcion_riesgo TEXT,
     descripcion_ramo TEXT,            -- p.ej. "Asistencia sanitaria" -- señal de Salud/Vida
     codigo_entidad_interno TEXT,      -- p.ej. "Asisa" -- segunda señal de Salud/Vida
+    ramo_entidad TEXT,                -- p.ej. "RAVI" -- señal de Travel (caso real 64171931)
+    fecha_anulacion TEXT,             -- solo si ClasePoliza=AN/SituacionPoliza=EX
+    motivo_anulacion TEXT,
     fecha_import TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(id_poliza)
 );
@@ -229,4 +232,7 @@ def inicializar_schema(conn: sqlite3.Connection) -> None:
     _asegurar_columna(conn, "polizas", "nota_origen", "TEXT")
     _asegurar_columna(conn, "eiac_polizas", "descripcion_ramo", "TEXT")
     _asegurar_columna(conn, "eiac_polizas", "codigo_entidad_interno", "TEXT")
+    _asegurar_columna(conn, "eiac_polizas", "ramo_entidad", "TEXT")
+    _asegurar_columna(conn, "eiac_polizas", "fecha_anulacion", "TEXT")
+    _asegurar_columna(conn, "eiac_polizas", "motivo_anulacion", "TEXT")
     conn.commit()

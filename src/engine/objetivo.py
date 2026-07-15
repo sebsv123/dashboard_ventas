@@ -100,16 +100,24 @@ def _desglose_mes(
     if altas.empty or df_polizas.empty:
         return DesgloseMesObjetivo(periodo, completo=hay_facturacion_del_periodo, es_eiac_parcial=es_eiac_parcial)
 
-    fusion = altas.merge(
-        df_polizas[["poliza", "forma_pago", "razon_social"]], on="poliza", how="left"
-    )
+    columnas_polizas = ["poliza", "forma_pago", "razon_social"]
+    if "situacion" in df_polizas.columns:
+        columnas_polizas.append("situacion")
+    fusion = altas.merge(df_polizas[columnas_polizas], on="poliza", how="left")
     faltan_polizas = bool(fusion["forma_pago"].isna().any())
 
     desglose = DesgloseMesObjetivo(
         periodo, completo=hay_facturacion_del_periodo and not faltan_polizas,
         es_eiac_parcial=es_eiac_parcial,
     )
+    # Anulada/baja (situacion != "A") no cuenta como producción del periodo,
+    # aunque tenga alta — pero SÍ cuenta para `faltan_polizas` de arriba (el
+    # check de "faltan datos" es sobre si la póliza EXISTE, no sobre si está
+    # activa). Ver caso real 64171931 (ASISA Travel and You, anulada por
+    # EIAC) en `engine.insights.polizas_activas`.
     for _, fila in fusion.dropna(subset=["forma_pago"]).iterrows():
+        if fila.get("situacion") not in (None, "A"):
+            continue
         prima = fila["prima_neta"] if fila["forma_pago"] == "A" else fila["prima_neta"] * 12
         if fila["razon_social"] in contrato.comisiones_vida:
             desglose.vida += prima

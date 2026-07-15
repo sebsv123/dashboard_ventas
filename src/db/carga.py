@@ -169,8 +169,9 @@ def cargar_eiac_polizas(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
             INSERT INTO eiac_polizas
                 (id_poliza, cliente_codigo, numero_poliza, situacion_poliza,
                  clase_poliza, fecha_efecto_inicial, fecha_emision, descripcion_riesgo,
-                 descripcion_ramo, codigo_entidad_interno)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 descripcion_ramo, codigo_entidad_interno, ramo_entidad,
+                 fecha_anulacion, motivo_anulacion)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id_poliza) DO UPDATE SET
                 cliente_codigo=excluded.cliente_codigo,
                 numero_poliza=excluded.numero_poliza,
@@ -180,13 +181,17 @@ def cargar_eiac_polizas(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
                 fecha_emision=excluded.fecha_emision,
                 descripcion_riesgo=excluded.descripcion_riesgo,
                 descripcion_ramo=excluded.descripcion_ramo,
-                codigo_entidad_interno=excluded.codigo_entidad_interno
+                codigo_entidad_interno=excluded.codigo_entidad_interno,
+                ramo_entidad=excluded.ramo_entidad,
+                fecha_anulacion=excluded.fecha_anulacion,
+                motivo_anulacion=excluded.motivo_anulacion
             """,
             (
                 r["id_poliza"], r["cliente_codigo"], r["numero_poliza"], r["situacion_poliza"],
                 r["clase_poliza"], _fecha_a_texto(r["fecha_efecto_inicial"]),
                 _fecha_a_texto(r["fecha_emision"]), r["descripcion_riesgo"],
-                r["descripcion_ramo"], r["codigo_entidad_interno"],
+                r["descripcion_ramo"], r["codigo_entidad_interno"], r["ramo_entidad"],
+                _fecha_a_texto(r["fecha_anulacion"]), r["motivo_anulacion"],
             ),
         )
         filas_insertadas += 1
