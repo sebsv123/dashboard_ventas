@@ -205,16 +205,19 @@ def test_resumen_historial_ajustes_cartera_vacia_no_revienta(contrato):
 
 # --- refinar_confianza_producto_asumido -------------------------------------
 
-def test_refinar_confianza_producto_asumido_baja_a_baja_con_nota(contrato):
+def test_refinar_confianza_producto_asumido_se_mantiene_en_media_con_nota(contrato):
+    # Confianza "media" (no "baja"): el 100% del histórico real de Salud
+    # de Sebastián usa este mismo % (ASISA PARTICULARES/RED SANITARIA),
+    # así que el % asumido tiene un respaldo real fuerte.
     fila = _fila_salud_mensual("64226440", date(2026, 7, 1))
     estimacion = estimar_comision_poliza(fila, contrato, prima_anual=1778.40)
     assert estimacion.confianza == "media"  # confianza inicial del motor genérico
 
     refinada = refinar_confianza_producto_asumido(estimacion, razon_social_asumida=True)
-    assert refinada.confianza == "baja"
-    assert "Producto exacto no confirmado" in refinada.nota
-    assert "ASISA Particulares" in refinada.nota
-    # El importe no cambia, solo confianza/nota.
+    assert refinada.confianza == "media"
+    assert "% asumido en base a que el 100% del histórico" in refinada.nota
+    assert "producto exacto no confirmado" in refinada.nota.lower()
+    # El importe no cambia, solo la nota.
     assert refinada.comision_bruta_estimada == estimacion.comision_bruta_estimada
 
 

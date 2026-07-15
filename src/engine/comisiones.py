@@ -351,24 +351,29 @@ def refinar_confianza_salud_mensual(
 def refinar_confianza_producto_asumido(
     estimacion: EstimacionComision, razon_social_asumida: bool
 ) -> EstimacionComision:
-    """Baja la confianza a "baja" cuando la comisión se calculó con un
+    """Ajusta la confianza a "media" cuando la comisión se calculó con un
     `razon_social` ASUMIDO por defecto, no confirmado.
 
     Caso real: pólizas provisionales de EIAC donde solo se sabe que son de
     Salud (por DescripcionRamo/CodigoEntidad), no el producto exacto —
     `engine.eiac_integracion.construir_polizas_provisionales_desde_eiac`
-    asume "ASISA PARTICULARES" en vez de dejar la comisión en 0€, pero esa
-    suposición debe marcarse como menos fiable que una póliza con producto
-    ya confirmado por el CSV oficial de Pólizas.
+    asume "ASISA PARTICULARES" en vez de dejar la comisión en 0€.
+
+    Confianza "media", no "baja": revisando TODO el histórico real de
+    Sebastián (7 meses de datos), el 100% de sus ventas de Salud son
+    ASISA PARTICULARES o ASISA RED SANITARIA — ambas al mismo 25%/20% —
+    nunca ha vendido Travel, Pymes ni Integral (que sí tienen % distintos
+    en el contrato). El producto exacto sigue sin confirmar, pero el %
+    asumido tiene un respaldo real fuerte, no es una suposición a ciegas.
     """
     if not razon_social_asumida:
         return estimacion
     nota = (
-        f"{estimacion.nota} Producto exacto no confirmado, % asumido por "
-        "defecto (ASISA Particulares) — EIAC solo confirma que es Salud, "
-        "no el producto concreto."
+        f"{estimacion.nota} % asumido en base a que el 100% del histórico "
+        "de ventas de Salud del agente usa este mismo porcentaje; producto "
+        "exacto no confirmado hasta que llegue el CSV oficial."
     ).strip()
-    return dataclasses.replace(estimacion, confianza="baja", nota=nota)
+    return dataclasses.replace(estimacion, confianza="media", nota=nota)
 
 
 @dataclass
