@@ -205,3 +205,64 @@ def test_estimar_comision_y_rappel_periodo_sin_altas_da_todo_cero(contrato):
     assert resultado.comision_bruta == 0.0
     assert resultado.total_bruto == resultado.rappel.importe
     assert resultado.total_neto == aplicar_retencion(resultado.rappel.importe, contrato)
+
+
+# --- Vida: comisión de recibos recurrentes (no solo primera alta) ----------
+
+def _fusion_altas_julio_real():
+    # Las 5 pólizas reales de Salud de julio 2026 (ver tests/test_eiac_integracion.py):
+    # 2 confirmadas por CSV oficial, 3 provisionales de EIAC (razon_social_asumida).
+    filas = [
+        {"poliza": "64174100", "forma_pago": "M", "razon_social": "ASISA PARTICULARES",
+         "fecha_efecto": date(2026, 6, 30), "prima_neta": 89.70},
+        {"poliza": "64201679", "forma_pago": "M", "razon_social": "ASISA PARTICULARES",
+         "fecha_efecto": date(2026, 6, 30), "prima_neta": 126.00},
+        {"poliza": "64226440", "forma_pago": "M", "razon_social": "ASISA PARTICULARES",
+         "fecha_efecto": date(2026, 7, 1), "prima_neta": 148.20, "razon_social_asumida": True},
+        {"poliza": "64261922", "forma_pago": "M", "razon_social": "ASISA PARTICULARES",
+         "fecha_efecto": date(2026, 7, 7), "prima_neta": 49.20, "razon_social_asumida": True},
+        {"poliza": "64276918", "forma_pago": "A", "razon_social": "ASISA PARTICULARES",
+         "fecha_efecto": date(2026, 7, 1), "prima_neta": 1409.40, "razon_social_asumida": True},
+    ]
+    return pd.DataFrame(filas)
+
+
+def _fusion_recibos_vida_julio_real():
+    # 3 pólizas Vida reales dadas de alta en mayo (fecha_efecto 2026-05-15,
+    # NO son "primera alta" de julio) con un recibo recurrente cobrado en
+    # julio -- Vida devenga comisión en CADA recibo, no solo en el primero.
+    # Bug real: antes de este fix, estos 49,49€ brutos no se contaban.
+    filas = [
+        {"poliza": "64110228", "forma_pago": "M", "razon_social": "ASISA VIDA TRANQUILIDAD",
+         "fecha_efecto": date(2026, 5, 15), "prima_neta": 28.29},
+        {"poliza": "64110254", "forma_pago": "M", "razon_social": "ASISA VIDA TRANQUILIDAD",
+         "fecha_efecto": date(2026, 5, 15), "prima_neta": 35.27},
+        {"poliza": "64101698", "forma_pago": "M", "razon_social": "ASISA VIDA TRANQUILIDAD",
+         "fecha_efecto": date(2026, 5, 15), "prima_neta": 18.93},
+    ]
+    return pd.DataFrame(filas)
+
+
+def test_estimar_comision_y_rappel_periodo_incluye_vida_recurrente_caso_real_julio(contrato):
+    """Caso real completo de julio 2026 (Sebastián, verificación manual):
+    5 altas de Salud (1.591,65€ de comisión bruta) + 3 recibos Vida
+    recurrentes (49,49€ de comisión bruta, antes ausentes del cálculo) +
+    rappel (1.200€, tope máximo) = 2.841,14€ bruto -> 2.414,97€ NETO
+    exactos tras la retención del 15%.
+    """
+    resultado = estimar_comision_y_rappel_periodo(
+        _fusion_altas_julio_real(), contrato, "2026-07", _fusion_recibos_vida_julio_real()
+    )
+    assert resultado.comision_bruta == pytest.approx(1641.14, abs=0.01)
+    assert resultado.rappel.importe == pytest.approx(1200.0)
+    assert resultado.total_bruto == pytest.approx(2841.14, abs=0.01)
+    assert resultado.total_neto == pytest.approx(2414.97, abs=0.01)
+
+
+def test_estimar_comision_y_rappel_periodo_sin_fusion_recibos_no_cuenta_vida_recurrente(contrato):
+    # Comportamiento anterior (sin pasar fusion_recibos_periodo): los
+    # recibos Vida recurrentes NO se cuentan -- reproduce el bug real que
+    # motivó este fix, para dejar constancia de la diferencia.
+    resultado = estimar_comision_y_rappel_periodo(_fusion_altas_julio_real(), contrato, "2026-07")
+    assert resultado.comision_bruta == pytest.approx(1591.65, abs=0.01)
+    assert resultado.total_neto == pytest.approx(2372.90, abs=0.01)

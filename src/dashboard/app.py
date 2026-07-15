@@ -251,7 +251,13 @@ def _mostrar_bloque_produccion_periodo(periodo: str, etiqueta: str) -> None:
     # solo altas que sí cruzan con Pólizas, para que "Producción detectada"
     # y el resto de cifras de este bloque partan del mismo conjunto de filas.
     _fusion_periodo = _altas_periodo.merge(df_polizas_con_eiac, on="poliza", how="inner")
-    _estimacion = estimar_comision_y_rappel_periodo(_fusion_periodo, contrato, periodo)
+    # TODOS los recibos del periodo (no solo primeras altas) -- Vida
+    # devenga comisión en cada recibo cobrado, no solo en el primero.
+    _recibos_periodo = df_facturacion_con_eiac[df_facturacion_con_eiac["periodo_liquidacion"] == periodo]
+    _fusion_recibos_periodo = _recibos_periodo.merge(df_polizas_con_eiac, on="poliza", how="inner")
+    _estimacion = estimar_comision_y_rappel_periodo(
+        _fusion_periodo, contrato, periodo, _fusion_recibos_periodo
+    )
 
     cm1, cm2 = st.columns(2)
     cm1.metric("Producción detectada", f"{_resumen.produccion_salud:,.2f} €")
@@ -685,10 +691,14 @@ with tab_rappel:
     altas_mes = primeras_altas_por_periodo(df_facturacion_con_eiac)
     altas_mes = altas_mes[altas_mes["periodo_liquidacion"] == mes_texto]
     fusion_mes = altas_mes.merge(df_polizas_con_eiac, on="poliza", how="inner")
+    # TODOS los recibos del mes (no solo primeras altas) -- Vida devenga
+    # comisión en cada recibo cobrado, no solo en el primero.
+    recibos_mes = df_facturacion_con_eiac[df_facturacion_con_eiac["periodo_liquidacion"] == mes_texto]
+    fusion_recibos_mes = recibos_mes.merge(df_polizas_con_eiac, on="poliza", how="inner")
 
     # Misma función que Calibración y Vista rápida — no duplicar la fórmula
     # de comisión/rappel/neto en cada pestaña (ver engine.calibracion).
-    estimacion_mes = estimar_comision_y_rappel_periodo(fusion_mes, contrato, mes_texto)
+    estimacion_mes = estimar_comision_y_rappel_periodo(fusion_mes, contrato, mes_texto, fusion_recibos_mes)
     resultado_rappel = estimacion_mes.rappel
     produccion_salud = estimacion_mes.produccion_salud
 

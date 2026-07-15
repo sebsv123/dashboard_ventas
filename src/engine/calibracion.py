@@ -14,7 +14,9 @@ de la comparación con una nota explícita — no es un fallo del motor, es
 ausencia de datos de entrada con los que estimar nada.
 
 La cifra "estimado" se calcula igual que en pantalla: suma de
-`estimar_comision_poliza` de cada primera alta del periodo (salud + vida)
+`estimar_comision_poliza` de cada primera alta del periodo (Salud) más
+TODOS los recibos Vida del periodo (Vida se devenga en cada recibo
+cobrado, no solo en el primero — ver `estimar_comision_y_rappel_periodo`)
 más el rappel estimado (`calcular_rappel_inicial`, solo producción de
 salud), todo ello neto de retención IRPF (`aplicar_retencion`) para ser
 comparable con el "Total factura" real, que ya viene neto de IRPF.
@@ -81,7 +83,10 @@ class EstimacionPeriodo:
 
 
 def estimar_comision_y_rappel_periodo(
-    fusion_altas: pd.DataFrame, contrato: ContratoConfig, periodo: str
+    fusion_altas: pd.DataFrame,
+    contrato: ContratoConfig,
+    periodo: str,
+    fusion_recibos_periodo: pd.DataFrame | None = None,
 ) -> EstimacionPeriodo:
     """Estima comisión bruta + rappel + total neto de un periodo.
 
@@ -94,6 +99,20 @@ def estimar_comision_y_rappel_periodo(
     asumido por defecto, ver `engine.eiac_integracion`), la confianza de
     esa comisión se baja a "baja" — no afecta al importe, solo a cómo se
     presenta la confianza.
+
+    `fusion_recibos_periodo` es distinto: TODOS los recibos de Facturación
+    con `periodo_liquidacion == periodo` (sin deduplicar a "primera
+    alta"), también fusionados con Pólizas. Hace falta para Vida: a
+    diferencia de Salud (que solo genera comisión NUEVA en la primera
+    alta, por el mecanismo de anticipo), Vida devenga comisión en CADA
+    recibo cobrado, todos los meses — un recibo recurrente de una póliza
+    Vida dada de alta hace tiempo no aparece en `fusion_altas` (no es su
+    "primera alta"), así que sin este segundo DataFrame esa comisión
+    recurrente se queda sin contar (bug real encontrado en julio 2026:
+    tres recibos Vida recurrentes, 49,49€ brutos, ausentes del Total NETO
+    hasta este fix). Si no se pasa (`None`), la comisión Vida solo
+    incluye la primera alta de cada póliza — mismo comportamiento que
+    antes de este fix, para no romper llamadas que todavía no lo pasen.
     """
     anio, mes = (int(x) for x in periodo.split("-"))
     fecha_ref = date(anio, mes, 1)
@@ -101,6 +120,12 @@ def estimar_comision_y_rappel_periodo(
     comision_bruta_total = 0.0
     produccion_salud = 0.0
     for _, fila in fusion_altas.iterrows():
+        es_vida = fila["razon_social"] in contrato.comisiones_vida
+        # Si se pasa fusion_recibos_periodo, Vida se calcula aparte más
+        # abajo con TODOS sus recibos del periodo — no sumar aquí también
+        # la primera alta o se contaría dos veces.
+        if es_vida and fusion_recibos_periodo is not None:
+            continue
         prima_anual = fila["prima_neta"] if fila["forma_pago"] == "A" else fila["prima_neta"] * 12
         prima_recibo_mensual = fila["prima_neta"] if fila["forma_pago"] != "A" else None
         estimacion = estimar_comision_poliza(
@@ -111,8 +136,20 @@ def estimar_comision_y_rappel_periodo(
             estimacion, fila.get("razon_social_asumida") is True
         )
         comision_bruta_total += estimacion.comision_bruta_estimada
-        if fila["razon_social"] not in contrato.comisiones_vida:
+        if not es_vida:
             produccion_salud += prima_anual
+
+    if fusion_recibos_periodo is not None and not fusion_recibos_periodo.empty:
+        recibos_vida = fusion_recibos_periodo[
+            fusion_recibos_periodo["razon_social"].isin(contrato.comisiones_vida.keys())
+        ]
+        for _, fila in recibos_vida.iterrows():
+            prima_recibo = fila["prima_neta"]
+            estimacion_vida = estimar_comision_poliza(
+                fila, contrato, prima_anual=prima_recibo * 12,
+                prima_recibo_mensual=prima_recibo, fecha_referencia=fecha_ref,
+            )
+            comision_bruta_total += estimacion_vida.comision_bruta_estimada
 
     rappel = calcular_rappel_inicial(contrato, fecha_referencia=fecha_ref, produccion_mes_salud=produccion_salud)
     total_bruto = comision_bruta_total + rappel.importe
@@ -186,7 +223,12 @@ def calcular_calibracion(
             )
             continue
 
-        estimaciones[periodo] = estimar_comision_y_rappel_periodo(fusion, contrato, periodo).total_neto
+        recibos_periodo = df_facturacion[df_facturacion["periodo_liquidacion"] == periodo]
+        fusion_recibos_periodo = recibos_periodo.merge(df_polizas, on="poliza", how="left")
+
+        estimaciones[periodo] = estimar_comision_y_rappel_periodo(
+            fusion, contrato, periodo, fusion_recibos_periodo
+        ).total_neto
         reales[periodo] = real_total
 
     diferencias = comparar_estimado_vs_real(estimaciones, reales)
