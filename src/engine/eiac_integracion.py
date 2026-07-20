@@ -92,6 +92,18 @@ Particulares), esta señal se comprueba ANTES que `_es_salud_por_ramo`
 `CodigoEntidad/CodigoInterno="Asisa"` compartido, y asumiría el % de
 Particulares equivocado) — ver `_es_travel_por_ramo`.
 
+DETECCIÓN DE VIDA — caso real (póliza 22594-64358396, Elias David
+Gonzalez Pacheco, entidad ASISA VIDA, efecto 2026-08-05, prima_neta
+~38,26€/mes): `RamoEntidad="VIDA"` (o `DescripcionRamo="Vida"`) es señal
+confirmada de Vida, igual de fiable que "RAVI" para Travel. A diferencia
+de Travel, `config/contrato.yaml` tiene varios productos de Vida con %
+muy distintos (Tranquilidad 60/20, Tranquilidad Hipoteca 40/45,
+Accidentes Senior 35/35), así que aquí NO se conoce el producto exacto —
+se asume "ASISA VIDA TRANQUILIDAD" (el más habitual en la cartera) igual
+que se hace con Salud/Particulares, marcado con `razon_social_asumida=
+True` para bajar la confianza de la estimación — ver
+`_es_vida_por_ramo`.
+
 ANULACIÓN POR EIAC (`ClasePoliza=AN`/`SituacionPoliza=EX`) — investigado
 en julio 2026 a raíz del mismo caso real: la póliza 64171931 fue anulada
 (fichero POLI posterior, `FechaAnulacion` real) DESPUÉS de su alta
@@ -141,15 +153,23 @@ _SITUACION_EIAC_A_ASISA = {
     "EX": "B",
 }
 
-# Señales de Salud confirmadas con datos reales (ver docstring del
-# módulo). No hay ninguna señal de Vida confirmada todavía — por eso solo
-# se detecta "es Salud" (afirmativo), nunca "es Vida" por descarte.
+# Señales de Salud y Vida confirmadas con datos reales (ver docstring del
+# módulo) — ambas solo se detectan de forma afirmativa, nunca por
+# descarte.
 _TERMINOS_RAMO_SALUD = ("sanitaria", "salud")
 _CODIGOS_ENTIDAD_SALUD_CONFIRMADOS = {"asisa"}
 
 # RamoEntidad "RAVI" -- señal confirmada de Travel (caso real 64171931).
 # Ver docstring del módulo: se comprueba ANTES que _es_salud_por_ramo.
 _RAMO_ENTIDAD_TRAVEL_CONFIRMADOS = {"ravi"}
+
+# RamoEntidad "VIDA" -- señal confirmada de Vida (caso real 22594-64358396,
+# ASISA VIDA, efecto 2026-08-05). Como con Travel, se comprueba ANTES que
+# _es_salud_por_ramo (aunque "vida" no coincide con ningún término de
+# _TERMINOS_RAMO_SALUD, por claridad se agrupa aquí con las demás señales
+# afirmativas por ramo).
+_RAMO_ENTIDAD_VIDA_CONFIRMADOS = {"vida"}
+_TERMINOS_DESCRIPCION_RAMO_VIDA = ("vida",)
 
 # razon_social por defecto cuando se confirma Salud pero no el producto
 # exacto — el más habitual en la cartera; ver docstring del módulo.
@@ -160,6 +180,13 @@ RAZON_SOCIAL_SALUD_POR_DEFECTO = "ASISA PARTICULARES"
 # exacto (no solo la categoría), a diferencia del default de Salud de
 # arriba.
 RAZON_SOCIAL_TRAVEL = "ASISA TRAVEL AND YOU"
+
+# razon_social por defecto cuando se confirma Vida pero no el producto
+# exacto — "ASISA VIDA TRANQUILIDAD" (60%/20%) es el más habitual en la
+# cartera de Vida; igual de incierto que el default de Salud de arriba
+# (hay otros productos de Vida en config/contrato.yaml con % muy
+# distintos: TRANQUILIDAD HIPOTECA 40/45, ACCIDENTES SENIOR 35/35).
+RAZON_SOCIAL_VIDA_POR_DEFECTO = "ASISA VIDA TRANQUILIDAD"
 
 COLUMNAS_FACTURACION_EIAC = [
     "poliza", "cliente_codigo", "cartera", "producto_nombre",
@@ -195,6 +222,22 @@ def _es_salud_por_ramo(descripcion_ramo, codigo_entidad_interno) -> bool:
     if (
         isinstance(codigo_entidad_interno, str)
         and codigo_entidad_interno.strip().lower() in _CODIGOS_ENTIDAD_SALUD_CONFIRMADOS
+    ):
+        return True
+    return False
+
+
+def _es_vida_por_ramo(ramo_entidad, descripcion_ramo) -> bool:
+    """True si RamoEntidad="VIDA" o DescripcionRamo="Vida" — señal
+    confirmada de Vida (caso real 22594-64358396, ver docstring del
+    módulo). Se comprueba antes que _es_salud_por_ramo."""
+    if (
+        isinstance(ramo_entidad, str)
+        and ramo_entidad.strip().lower() in _RAMO_ENTIDAD_VIDA_CONFIRMADOS
+    ):
+        return True
+    if isinstance(descripcion_ramo, str) and any(
+        t in descripcion_ramo.lower() for t in _TERMINOS_DESCRIPCION_RAMO_VIDA
     ):
         return True
     return False
@@ -350,6 +393,7 @@ def construir_polizas_provisionales_desde_eiac(
         forma_pago = _PISTA_A_FORMA_PAGO.get(pista)
 
         es_travel = _es_travel_por_ramo(p.get("ramo_entidad"))
+        es_vida = _es_vida_por_ramo(p.get("ramo_entidad"), p.get("descripcion_ramo"))
         es_salud = _es_salud_por_ramo(p.get("descripcion_ramo"), p.get("codigo_entidad_interno"))
         if es_travel:
             razon_social = RAZON_SOCIAL_TRAVEL
@@ -360,6 +404,17 @@ def construir_polizas_provisionales_desde_eiac(
                 f"por RamoEntidad='{p.get('ramo_entidad')}' — único producto de viaje "
                 "en el contrato, señal inequívoca (no un default estadístico como el "
                 "de Salud)."
+            )
+        elif es_vida:
+            razon_social = RAZON_SOCIAL_VIDA_POR_DEFECTO
+            razon_social_asumida = True
+            nota = (
+                f"Origen: EIAC (id_poliza={p['id_poliza']}), pendiente de confirmar "
+                "con Pólizas oficial. Producto exacto no confirmado, % asumido por "
+                f"defecto ({RAZON_SOCIAL_VIDA_POR_DEFECTO}) — EIAC confirma Vida por "
+                f"RamoEntidad='{p.get('ramo_entidad')}'/DescripcionRamo, pero no el "
+                "producto concreto (Tranquilidad/Tranquilidad Hipoteca/Accidentes "
+                "Senior/etc.)."
             )
         elif es_salud:
             razon_social = RAZON_SOCIAL_SALUD_POR_DEFECTO

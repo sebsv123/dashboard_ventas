@@ -8,6 +8,7 @@ from engine.config_contrato import cargar_contrato
 from engine.eiac_integracion import (
     RAZON_SOCIAL_SALUD_POR_DEFECTO,
     RAZON_SOCIAL_TRAVEL,
+    RAZON_SOCIAL_VIDA_POR_DEFECTO,
     construir_facturacion_desde_eiac,
     construir_polizas_provisionales_desde_eiac,
     integrar_eiac,
@@ -371,6 +372,32 @@ def test_construir_polizas_provisionales_anulacion_actualiza_situacion_caso_real
     assert fila["situacion"] == "B"
     # Sigue detectando Travel correctamente aunque venga del fichero de anulación.
     assert fila["razon_social"] == RAZON_SOCIAL_TRAVEL
+
+
+# --- caso real 22594-64358396 (Elias David Gonzalez Pacheco, ASISA VIDA):
+# detección de Vida por RamoEntidad
+
+def test_construir_polizas_provisionales_asume_tranquilidad_cuando_confirma_vida_caso_real():
+    # RamoEntidad="VIDA" (caso real 22594-64358396, entidad ASISA VIDA,
+    # efecto 2026-08-05, prima_neta ~38,26€/mes) debe usar "ASISA VIDA
+    # TRANQUILIDAD" (60%/20%, el producto de Vida más habitual en la
+    # cartera) en vez de dejar razon_social en None.
+    df_eiac_polizas = pd.DataFrame(
+        [{"id_poliza": "22594-64358396", "situacion_poliza": "EV", "clase_poliza": "NP",
+          "fecha_efecto_inicial": date(2026, 8, 5), "fecha_emision": date(2026, 7, 20),
+          "descripcion_riesgo": "Elias David Gonzalez Pacheco", "cliente_codigo": "22594",
+          "ramo_entidad": "VIDA", "descripcion_ramo": "Vida", "codigo_entidad_interno": "Asisa"}]
+    )
+    provisionales, no_reconocidos = construir_polizas_provisionales_desde_eiac(
+        df_eiac_polizas, pd.DataFrame(), pd.DataFrame()
+    )
+    assert no_reconocidos == []
+    fila = provisionales[provisionales["poliza"] == "64358396"].iloc[0]
+    assert fila["razon_social"] == RAZON_SOCIAL_VIDA_POR_DEFECTO
+    assert bool(fila["razon_social_asumida"]) is True
+    assert "Producto exacto no confirmado" in fila["nota_origen"]
+    assert RAZON_SOCIAL_VIDA_POR_DEFECTO in fila["nota_origen"]
+    assert "RamoEntidad='VIDA'" in fila["nota_origen"]
 
 
 def test_poliza_anulada_con_recibo_no_cuenta_produccion_del_periodo(contrato):
