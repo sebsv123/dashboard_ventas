@@ -505,9 +505,9 @@ with st.sidebar:
     st.subheader("Descargar todo")
     st.caption(
         "Un único Excel con todos los datos analizados (Pólizas, "
-        "Facturación, Liquidación, Factura PDF, EIAC, Objetivo anual y "
-        "Calibración), más una hoja de avisos que señala qué meses "
-        "todavía no tienen ningún dato cargado."
+        "Facturación, Liquidación, Factura PDF, EIAC, Objetivo anual, "
+        "Wanderlust/PAE y Calibración), más una hoja de avisos que señala "
+        "qué meses todavía no tienen ningún dato cargado."
     )
     excel_bytes = _construir_excel_completo_cacheado(
         df_polizas_con_eiac, df_facturacion_con_eiac, df_liquidacion,
