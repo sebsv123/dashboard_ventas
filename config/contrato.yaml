@@ -168,3 +168,31 @@ alertas:
 # -----------------------------------------------------------------------------
 objetivos:
   produccion_anual: 100000   # € de prima anualizada nueva en el año natural
+
+# -----------------------------------------------------------------------------
+# Wanderlust / PAE — incentivo comercial de ASISA para 2026. Bases legales
+# adjuntas al agente (fuera de este repo). DISTINTO de "objetivos" de arriba:
+# esto mide PAE (Primas Anualizadas Equivalentes) = variación de cartera
+# anualizada por producto, ponderada por el multiplicador de abajo, entre el
+# 1 de enero y el 31 de diciembre de 2026 — NO producción bruta en euros.
+# Ver `engine.wanderlust` para el cálculo y el mapeo razon_social -> categoría.
+#
+# PENDIENTE: "Colectivos Nacionales" tiene un acelerador especial en las
+# bases legales — el agente no vende este tipo de producto todavía, así que
+# no está aquí. Si algún día aplica, añadir su multiplicador real.
+# -----------------------------------------------------------------------------
+wanderlust:
+  # ASISA comunica un objetivo PAE individual a cada agente; Sebastián
+  # todavía no tiene el número exacto (julio 2026). Rellenar en cuanto se
+  # conozca — mientras tanto se deja sin definir, nunca inventado.
+  objetivo_paes: null
+  multiplicadores_paes:
+    "Salud Particulares": 1.0
+    "Salud colectivos privados": 0.7
+    "ASISA Dental": 1.5
+    "ASISA Hospitalización": 4.0
+    "ASISA Accidentes": 4.0
+    "ASISA Vida": 3.5
+    "ASISA Decesos": 3.5
+    "ASISA Mascotas": 1.2
+    "ASISA Travel": 0.5

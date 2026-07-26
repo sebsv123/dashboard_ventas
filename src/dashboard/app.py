@@ -36,6 +36,7 @@ from engine.config_contrato import cargar_contrato
 from engine.eiac_integracion import integrar_eiac
 from engine.fiscal import anios_disponibles, calcular_retenciones_anio
 from engine.objetivo import calcular_objetivo_anual
+from engine.wanderlust import calcular_pae_anual
 from engine.insights import (
     alertas_cambio_tarifa,
     construir_produccion_polizas,
@@ -62,6 +63,7 @@ from ingestion.facturacion import parsear_facturacion
 from ingestion.factura_pdf import parsear_factura_pdf
 from ingestion.liquidacion import parsear_liquidacion
 from ingestion.polizas import parsear_polizas
+from dashboard.exportacion import construir_excel_completo
 
 # DASHBOARD_DB_PATH permite apuntar a otra BD (tests de humo con AppTest);
 # sin la variable de entorno, el comportamiento es idéntico al de siempre.
@@ -125,6 +127,21 @@ def cargar_datos():
 
 
 df_polizas, df_facturacion, df_liquidacion, df_factura_pdf, df_eiac_polizas, df_eiac_recibos = cargar_datos()
+
+
+@st.cache_data(ttl=60)
+def _construir_excel_completo_cacheado(
+    df_polizas, df_facturacion, df_liquidacion, df_factura_pdf, df_eiac_polizas, df_eiac_recibos
+) -> bytes:
+    return construir_excel_completo(
+        df_polizas=df_polizas,
+        df_facturacion=df_facturacion,
+        df_liquidacion=df_liquidacion,
+        df_factura_pdf=df_factura_pdf,
+        df_eiac_polizas=df_eiac_polizas,
+        df_eiac_recibos=df_eiac_recibos,
+        contrato=contrato,
+    )
 
 # EIAC "en vivo": las pólizas provisionales que ya se persistieron en
 # `polizas` (ver sidebar) hacen que df_polizas ya las incluya solo con
@@ -485,6 +502,26 @@ with st.sidebar:
             )
 
     st.divider()
+    st.subheader("Descargar todo")
+    st.caption(
+        "Un único Excel con todos los datos analizados (Pólizas, "
+        "Facturación, Liquidación, Factura PDF, EIAC, Objetivo anual y "
+        "Calibración), más una hoja de avisos que señala qué meses "
+        "todavía no tienen ningún dato cargado."
+    )
+    excel_bytes = _construir_excel_completo_cacheado(
+        df_polizas_con_eiac, df_facturacion_con_eiac, df_liquidacion,
+        df_factura_pdf, df_eiac_polizas, df_eiac_recibos,
+    )
+    st.download_button(
+        "⬇️ Descargar Excel completo",
+        data=excel_bytes,
+        file_name=f"dashboard_ventas_{date.today().isoformat()}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        width="stretch",
+    )
+
+    st.divider()
     st.caption(
         "Los ficheros de Facturación/Pólizas dan una vista **estimada** "
         "en tiempo casi real. La Liquidación/Factura mensual es la que "
@@ -563,10 +600,13 @@ st.divider()
 #   - Insights: todo el histórico (como Resumen), pero al agrupar "por mes"
 #     también usa periodo_liquidacion vía construir_produccion_polizas,
 #     por la misma razón que Rappel.
-tab_resumen, tab_polizas, tab_rappel, tab_alertas, tab_insights, tab_irpf, tab_objetivo, tab_calibracion = st.tabs(
+(
+    tab_resumen, tab_polizas, tab_rappel, tab_alertas, tab_insights, tab_irpf,
+    tab_objetivo, tab_wanderlust, tab_calibracion,
+) = st.tabs(
     [
         "📊 Resumen", "📋 Pólizas", "🎯 Rappel", "⚠️ Alertas", "📈 Insights",
-        "💶 Retenciones IRPF", "🎯 Objetivo anual", "📐 Calibración",
+        "💶 Retenciones IRPF", "🎯 Objetivo anual", "🏆 Wanderlust / PAE", "📐 Calibración",
     ]
 )
 
@@ -1047,6 +1087,101 @@ with tab_objetivo:
     )
     st.plotly_chart(fig_objetivo, width="stretch")
     st.dataframe(tabla_meses, width="stretch", hide_index=True)
+
+# =============================================================================
+# TAB: Wanderlust / PAE — incentivo comercial ASISA 2026
+# =============================================================================
+with tab_wanderlust:
+    st.subheader("Wanderlust / PAE — incentivo comercial ASISA 2026")
+    st.caption(
+        "PAE (Primas Anualizadas Equivalentes) = variación de cartera "
+        "anualizada por producto, ponderada por un multiplicador (config/"
+        "contrato.yaml, wanderlust.multiplicadores_paes), entre el 1 de "
+        "enero y el 31 de diciembre de 2026. DISTINTO del 'Objetivo anual' "
+        "de al lado: no es producción bruta en euros. Y a diferencia del "
+        "resto del dashboard, aquí NO se usa periodo_liquidacion ni el "
+        "ciclo 16→15 — una póliza cuenta en cuanto su fecha de efecto cae "
+        "dentro del año natural 2026, sin importar cuándo se factura. "
+        "Incluye también las altas que solo están en EIAC todavía, igual "
+        "que Vista rápida/Objetivo anual."
+    )
+    st.info(
+        "⚠️ Multirramo Salud + Accidentes: el agente a veces vende "
+        "Accidentes dentro de una póliza de Salud, pero con los datos "
+        "actuales no hay forma fiable de distinguirlo — el campo SUBRAMO de "
+        "Liquidación solo se ha visto con el valor 'VACIO' y ni siquiera se "
+        "guarda hoy en la base de datos, y EIAC tampoco trae una señal "
+        "equivalente. Estas pólizas se clasifican solo por su razon_social "
+        "de Salud, así que el Accidentes incluido dentro de una multirramo "
+        "puede que no se contabilice aparte en 'ASISA Accidentes' todavía "
+        "— pendiente de confirmar con más datos."
+    )
+
+    _anio_pae = 2026
+    _objetivo_pae_config = contrato.wanderlust_objetivo_paes
+    objetivo_pae_input = st.number_input(
+        "Objetivo PAE individual (opcional, lo comunica ASISA por agente)",
+        min_value=0.0,
+        value=float(_objetivo_pae_config) if _objetivo_pae_config else 0.0,
+        step=100.0,
+        help=(
+            "Por defecto viene de config/contrato.yaml "
+            "(wanderlust.objetivo_paes). Déjalo en 0 mientras no lo sepas — "
+            "sin objetivo no se muestra ningún % de cumplimiento inventado, "
+            "solo el PAE acumulado en bruto."
+        ),
+    )
+    objetivo_pae = objetivo_pae_input if objetivo_pae_input > 0 else None
+
+    resultado_pae = calcular_pae_anual(
+        df_polizas_con_eiac, df_facturacion_con_eiac, contrato,
+        anio=_anio_pae, objetivo=objetivo_pae,
+    )
+
+    if objetivo_pae:
+        st.metric(
+            f"PAE acumulado {_anio_pae}",
+            f"{resultado_pae.pae_total:,.2f} de {objetivo_pae:,.2f}",
+        )
+        st.progress(min((resultado_pae.porcentaje or 0) / 100, 1.0))
+        st.caption(f"{resultado_pae.porcentaje:.1f}% del objetivo PAE")
+    else:
+        st.metric(f"PAE acumulado {_anio_pae}", f"{resultado_pae.pae_total:,.2f}")
+        st.caption(
+            "Sin objetivo PAE individual definido todavía — solo se "
+            "muestra el acumulado bruto, sin % de cumplimiento."
+        )
+
+    if resultado_pae.sin_categoria:
+        st.warning(
+            f"⚠️ {resultado_pae.sin_categoria} póliza(s) con fecha de "
+            f"efecto en {_anio_pae} no se pudieron clasificar en ninguna "
+            "categoría PAE (producto/razon_social desconocido) — no suman "
+            "al acumulado de arriba."
+        )
+
+    st.divider()
+    st.markdown("### Desglose por producto")
+    tabla_pae = pd.DataFrame(
+        [
+            {
+                "Categoría": d.categoria,
+                "PAE (€)": d.pae,
+                "Altas": d.polizas_alta,
+                "Anuladas": d.polizas_baja,
+            }
+            for d in sorted(resultado_pae.por_categoria.values(), key=lambda d: -d.pae)
+        ]
+    )
+    if not tabla_pae.empty:
+        fig_pae = px.bar(
+            tabla_pae, x="Categoría", y="PAE (€)",
+            color_discrete_sequence=[AZUL_ASISA],
+        )
+        st.plotly_chart(fig_pae, width="stretch")
+        st.dataframe(tabla_pae, width="stretch", hide_index=True)
+    else:
+        st.info(f"Todavía no hay pólizas con fecha de efecto en {_anio_pae} clasificadas.")
 
 # =============================================================================
 # TAB: Calibración del motor — estimado vs. real

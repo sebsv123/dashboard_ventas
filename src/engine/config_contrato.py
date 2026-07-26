@@ -60,6 +60,9 @@ class ContratoConfig(BaseModel):
     # viven aquí porque es la única fuente de verdad de "números" del
     # proyecto — nunca hardcodear un objetivo en el código).
     objetivos: dict = Field(default_factory=dict)
+    # Incentivo comercial "Wanderlust / PAE" de ASISA para 2026 — ver
+    # engine.wanderlust y la sección `wanderlust` de contrato.yaml.
+    wanderlust: dict = Field(default_factory=dict)
 
     @property
     def retencion_irpf(self) -> float:
@@ -89,6 +92,14 @@ class ContratoConfig(BaseModel):
     @property
     def objetivo_produccion_anual(self) -> float:
         return self.objetivos.get("produccion_anual", 100000.0)
+
+    @property
+    def wanderlust_multiplicadores(self) -> dict[str, float]:
+        return self.wanderlust.get("multiplicadores_paes", {})
+
+    @property
+    def wanderlust_objetivo_paes(self) -> float | None:
+        return self.wanderlust.get("objetivo_paes")
 
 
 @lru_cache(maxsize=1)
