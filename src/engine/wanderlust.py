@@ -45,6 +45,28 @@ explícitamente — el agente no tenía producción antes de febrero de 2026
 (confirmado en conversaciones previas). Si algún día se descubre cartera
 previa real, esta asunción habrá que revisarla (afectaría a qué cuenta como
 "variación" en vez de partir de 0).
+
+VENCIMIENTO NATURAL VS. CANCELACIÓN ANTICIPADA — aclaración del agente
+sobre el caso real 64171931 (ASISA Travel and You): esa póliza NO fue una
+cancelación anticipada, sino un producto de duración fija (viaje de 9 días)
+que venció de forma normal al terminar su cobertura contratada
+(FechaAnulacion 19/06/2026 en EIAC coincide EXACTAMENTE con la fecha_hasta
+del recibo). El PDF de Wanderlust dice que "en caso de anulaciones se
+restará toda la prima anual" — eso se refiere a cancelaciones anticipadas
+reales, no al fin de cobertura normal de un producto ya diseñado para durar
+poco. Por eso `situacion == "B"` YA NO basta por sí sola: solo resta si la
+anulación ocurrió ANTES de agotar la cobertura contratada del recibo
+(`fecha_baja < fecha_hasta`); si coincide con el fin de cobertura o es
+posterior, cuenta como PAE ganado normal, igual que si nunca se hubiera
+anulado. Sin ambas fechas (`fecha_baja` de Pólizas, `fecha_hasta` del
+primer recibo) no se puede confirmar el vencimiento natural, así que por
+defecto SÍ se resta — ver `_es_vencimiento_natural`. Limitación real de
+datos: las pólizas provisionales de EIAC nunca traen `fecha_baja` (el
+upsert de `engine.eiac_integracion` la deja siempre en None) ni sus recibos
+traen `fecha_hasta` (no existe esa columna en `eiac_recibos`), así que esta
+distinción hoy solo puede confirmarse con datos ya presentes en el CSV
+oficial — cualquier anulación que solo se vea por EIAC sigue restando por
+defecto hasta que llegue el CSV oficial que lo confirme o lo desmienta.
 """
 
 from __future__ import annotations
@@ -54,7 +76,6 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from engine.config_contrato import ContratoConfig
-from engine.insights import primeras_altas_por_periodo
 
 # razon_social (Salud) -> categoría PAE de las bases legales Wanderlust.
 # Ver docstring del módulo sobre la asunción de INTEGRAL/PYMES.
@@ -80,6 +101,37 @@ def _categoria(razon_social: str, contrato: ContratoConfig) -> str | None:
     if razon_social in contrato.comisiones_vida:
         return CATEGORIA_VIDA
     return CATEGORIA_SALUD_POR_RAZON_SOCIAL.get(razon_social)
+
+
+def _primer_recibo_con_fecha_hasta(df_facturacion: pd.DataFrame) -> pd.DataFrame:
+    """Igual que `primeras_altas_por_periodo` (mismo criterio de "primer
+    recibo": ordenado por poliza/periodo_liquidacion/fecha_desde), pero
+    conserva también `fecha_hasta` — el fin de la cobertura contratada de
+    ese recibo, necesario para `_es_vencimiento_natural` y que la función
+    compartida no expone (ver su contrato de 3 columnas)."""
+    columnas = ["poliza", "periodo_liquidacion", "prima_neta", "fecha_hasta"]
+    if df_facturacion.empty:
+        return pd.DataFrame(columns=columnas)
+    df = df_facturacion.copy()
+    if "fecha_hasta" not in df.columns:
+        df["fecha_hasta"] = None
+    ordenado = df.sort_values(["poliza", "periodo_liquidacion", "fecha_desde"])
+    primeras = ordenado.groupby("poliza", as_index=False).first()
+    return primeras[columnas]
+
+
+def _es_vencimiento_natural(fecha_baja, fecha_hasta) -> bool:
+    """True si la anulación coincide con (o es posterior a) el fin de la
+    cobertura contratada del recibo — vencimiento normal de un producto de
+    duración fija (p.ej. Travel), no una cancelación anticipada real (ver
+    caso real 64171931 en el docstring del módulo).
+
+    Sin ambas fechas no se puede confirmar -> False por defecto (se resta,
+    como exige el PDF de Wanderlust para cualquier anulación no confirmada
+    como vencimiento natural)."""
+    if fecha_baja is None or fecha_hasta is None or pd.isna(fecha_baja) or pd.isna(fecha_hasta):
+        return False
+    return pd.Timestamp(fecha_baja) >= pd.Timestamp(fecha_hasta)
 
 
 @dataclass
@@ -121,23 +173,32 @@ def calcular_pae_anual(
 
     Usa `fecha_efecto` de `df_polizas` para decidir si una póliza cuenta
     (NO `periodo_liquidacion`, ver docstring del módulo). La prima_neta de
-    cada póliza se obtiene de su primer recibo en `df_facturacion` (misma
-    función `primeras_altas_por_periodo` que usa el resto del proyecto) —
-    solo se usa para conseguir el importe, no para filtrar por periodo.
+    cada póliza se obtiene de su primer recibo en `df_facturacion`
+    (`_primer_recibo_con_fecha_hasta`, mismo criterio de "primer recibo" que
+    `engine.insights.primeras_altas_por_periodo` usa en el resto del
+    proyecto) — solo se usa para conseguir el importe y `fecha_hasta`, no
+    para filtrar por periodo.
 
     Pólizas con `situacion == "B"` (anulada/baja) RESTAN su PAE completo del
-    acumulado de su categoría, en vez de simplemente no sumar.
+    acumulado de su categoría, en vez de simplemente no sumar — SALVO que la
+    anulación coincida con (o sea posterior a) el fin de la cobertura
+    contratada del recibo (`fecha_baja >= fecha_hasta`), en cuyo caso es un
+    vencimiento natural (producto de duración fija, p.ej. Travel) y cuenta
+    como PAE ganado normal — ver `_es_vencimiento_natural` y el caso real
+    64171931 en el docstring del módulo.
     """
     objetivo_final = objetivo if objetivo is not None else contrato.wanderlust_objetivo_paes
     resultado = ResultadoPae(anio=anio, objetivo=objetivo_final)
     if df_polizas.empty or df_facturacion.empty:
         return resultado
 
-    primeras = primeras_altas_por_periodo(df_facturacion)[["poliza", "prima_neta"]]
+    primeras = _primer_recibo_con_fecha_hasta(df_facturacion)
 
     columnas = ["poliza", "razon_social", "forma_pago", "fecha_efecto"]
     if "situacion" in df_polizas.columns:
         columnas.append("situacion")
+    if "fecha_baja" in df_polizas.columns:
+        columnas.append("fecha_baja")
     fusion = primeras.merge(df_polizas[columnas], on="poliza", how="inner")
     if fusion.empty:
         return resultado
@@ -162,7 +223,8 @@ def calcular_pae_anual(
         pae_poliza = prima_anual * multiplicador
 
         desglose = resultado.por_categoria.setdefault(categoria, DesgloseCategoriaPae(categoria))
-        if fila.get("situacion") == "B":
+        es_anulada = fila.get("situacion") == "B"
+        if es_anulada and not _es_vencimiento_natural(fila.get("fecha_baja"), fila.get("fecha_hasta")):
             desglose.pae -= pae_poliza
             desglose.polizas_baja += 1
         else:

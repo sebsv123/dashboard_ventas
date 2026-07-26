@@ -14,22 +14,24 @@ def contrato():
     return cargar_contrato(CONFIG_PATH)
 
 
-def _poliza(poliza, razon_social, forma_pago, fecha_efecto, situacion="A"):
+def _poliza(poliza, razon_social, forma_pago, fecha_efecto, situacion="A", fecha_baja=None):
     return {
         "poliza": poliza,
         "razon_social": razon_social,
         "forma_pago": forma_pago,
         "fecha_efecto": fecha_efecto,
         "situacion": situacion,
+        "fecha_baja": fecha_baja,
     }
 
 
-def _recibo(poliza, prima_neta, periodo_liquidacion, fecha_desde):
+def _recibo(poliza, prima_neta, periodo_liquidacion, fecha_desde, fecha_hasta=None):
     return {
         "poliza": poliza,
         "prima_neta": prima_neta,
         "periodo_liquidacion": periodo_liquidacion,
         "fecha_desde": fecha_desde,
+        "fecha_hasta": fecha_hasta,
     }
 
 
@@ -114,6 +116,62 @@ def test_anulacion_resta_pae_completo(contrato):
     assert desglose.polizas_alta == 1
     assert desglose.polizas_baja == 1
     assert resultado.pae_total == pytest.approx(200.0)
+
+
+def test_vencimiento_natural_no_resta_caso_real_64171931(contrato):
+    """Caso real: ASISA Travel and You, viaje de 9 días, situacion="B" en
+    Pólizas pero FechaAnulacion (fecha_baja) coincide EXACTAMENTE con la
+    fecha_hasta del recibo (fin de cobertura contratada) -- no es una
+    cancelación anticipada, es el vencimiento normal del producto. Debe
+    contar como PAE ganado, no restarse."""
+    df_polizas = pd.DataFrame(
+        [
+            _poliza(
+                "64171931", "ASISA TRAVEL AND YOU", "A", "2026-06-10",
+                situacion="B", fecha_baja="2026-06-19",
+            ),
+        ]
+    )
+    df_facturacion = pd.DataFrame(
+        [
+            _recibo("64171931", 100.0, "2026-06", "2026-06-10", fecha_hasta="2026-06-19"),
+        ]
+    )
+    resultado = calcular_pae_anual(df_polizas, df_facturacion, contrato, anio=2026)
+    desglose = resultado.por_categoria["ASISA Travel"]
+
+    assert desglose.pae == pytest.approx(100.0 * 0.5)
+    assert desglose.polizas_alta == 1
+    assert desglose.polizas_baja == 0
+    assert resultado.pae_total == pytest.approx(50.0)
+
+
+def test_cancelacion_anticipada_real_si_resta_pae(contrato):
+    """Cancelación anticipada genuina: fecha_baja ANTES de agotar la
+    cobertura contratada (fecha_hasta) -- a diferencia del vencimiento
+    natural de arriba, esto sí debe restar la prima anual completa."""
+    df_polizas = pd.DataFrame(
+        [
+            _poliza(
+                "P-CANC", "ASISA PARTICULARES", "M", "2026-03-01",
+                situacion="B", fecha_baja="2026-04-01",
+            ),
+        ]
+    )
+    df_facturacion = pd.DataFrame(
+        [
+            # cobertura contratada hasta fin de año, pero se anula en abril
+            _recibo("P-CANC", 50.0, "2026-03", "2026-03-01", fecha_hasta="2026-12-31"),
+        ]
+    )
+    resultado = calcular_pae_anual(df_polizas, df_facturacion, contrato, anio=2026)
+    desglose = resultado.por_categoria["Salud Particulares"]
+
+    # 50*12*1.0 = 600, restado por completo
+    assert desglose.pae == pytest.approx(-600.0)
+    assert desglose.polizas_alta == 0
+    assert desglose.polizas_baja == 1
+    assert resultado.pae_total == pytest.approx(-600.0)
 
 
 # --- NO se usa periodo_liquidacion ---------------------------------------------
