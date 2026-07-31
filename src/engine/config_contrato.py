@@ -35,6 +35,7 @@ class RappelInicial(BaseModel):
     minimo: float
     maximo: float
     base_100pct: float
+    incluir_produccion_vida: bool = False
 
 
 class NivelMix(BaseModel):

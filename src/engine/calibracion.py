@@ -17,8 +17,8 @@ La cifra "estimado" se calcula igual que en pantalla: suma de
 `estimar_comision_poliza` de cada primera alta del periodo (Salud) más
 TODOS los recibos Vida del periodo (Vida se devenga en cada recibo
 cobrado, no solo en el primero — ver `estimar_comision_y_rappel_periodo`)
-más el rappel estimado (`calcular_rappel_inicial`, solo producción de
-salud), todo ello neto de retención IRPF (`aplicar_retencion`) para ser
+más el rappel estimado (`calcular_rappel_inicial`, cuya base Vida depende de
+configuración), todo ello neto de retención IRPF (`aplicar_retencion`) para ser
 comparable con el "Total factura" real, que ya viene neto de IRPF.
 """
 
@@ -76,6 +76,9 @@ class EstimacionPeriodo:
 
     periodo: str
     produccion_salud: float
+    produccion_vida: float
+    comision_salud: float
+    comision_vida: float
     comision_bruta: float
     rappel: ResultadoRappelInicial
     total_bruto: float
@@ -132,18 +135,22 @@ def estimar_comision_y_rappel_periodo(
     anio, mes = (int(x) for x in periodo.split("-"))
     fecha_ref = date(anio, mes, 1)
 
-    comision_bruta_total = 0.0
+    comision_salud = 0.0
+    comision_vida = 0.0
     produccion_salud = 0.0
+    produccion_vida = 0.0
     for _, fila in fusion_altas.iterrows():
         if fila.get("situacion") not in (None, "A"):
             continue  # anulada/baja: no cuenta como producción de este periodo
         es_vida = fila["razon_social"] in contrato.comisiones_vida
+        prima_anual = fila["prima_neta"] if fila["forma_pago"] == "A" else fila["prima_neta"] * 12
         # Si se pasa fusion_recibos_periodo, Vida se calcula aparte más
         # abajo con TODOS sus recibos del periodo — no sumar aquí también
         # la primera alta o se contaría dos veces.
+        if es_vida:
+            produccion_vida += prima_anual
         if es_vida and fusion_recibos_periodo is not None:
             continue
-        prima_anual = fila["prima_neta"] if fila["forma_pago"] == "A" else fila["prima_neta"] * 12
         prima_recibo_mensual = fila["prima_neta"] if fila["forma_pago"] != "A" else None
         estimacion = estimar_comision_poliza(
             fila, contrato, prima_anual=prima_anual,
@@ -152,8 +159,10 @@ def estimar_comision_y_rappel_periodo(
         estimacion = refinar_confianza_producto_asumido(
             estimacion, fila.get("razon_social_asumida") is True
         )
-        comision_bruta_total += estimacion.comision_bruta_estimada
-        if not es_vida:
+        if es_vida:
+            comision_vida += estimacion.comision_bruta_estimada
+        else:
+            comision_salud += estimacion.comision_bruta_estimada
             produccion_salud += prima_anual
 
     if fusion_recibos_periodo is not None and not fusion_recibos_periodo.empty:
@@ -168,15 +177,22 @@ def estimar_comision_y_rappel_periodo(
                 fila, contrato, prima_anual=prima_recibo * 12,
                 prima_recibo_mensual=prima_recibo, fecha_referencia=fecha_ref,
             )
-            comision_bruta_total += estimacion_vida.comision_bruta_estimada
+            comision_vida += estimacion_vida.comision_bruta_estimada
 
-    rappel = calcular_rappel_inicial(contrato, fecha_referencia=fecha_ref, produccion_mes_salud=produccion_salud)
+    comision_bruta_total = comision_salud + comision_vida
+    rappel = calcular_rappel_inicial(
+        contrato, fecha_referencia=fecha_ref, produccion_mes_salud=produccion_salud,
+        produccion_mes_vida=produccion_vida,
+    )
     total_bruto = comision_bruta_total + rappel.importe
     total_neto = aplicar_retencion(total_bruto, contrato)
 
     return EstimacionPeriodo(
         periodo=periodo,
         produccion_salud=round(produccion_salud, 2),
+        produccion_vida=round(produccion_vida, 2),
+        comision_salud=round(comision_salud, 2),
+        comision_vida=round(comision_vida, 2),
         comision_bruta=round(comision_bruta_total, 2),
         rappel=rappel,
         total_bruto=round(total_bruto, 2),

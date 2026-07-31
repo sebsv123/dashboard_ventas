@@ -102,7 +102,7 @@ def meses_transcurridos(fecha_efecto: date, fecha_referencia: date) -> int:
 
     Pública a propósito: es el único criterio de "¿cuándo cumple 12 meses
     una póliza?" del proyecto. Cualquier otro módulo que necesite saber si
-    una póliza ya está en año 2+ (p.ej. las alertas de cambio de tarifa de
+    una póliza ya está en año 2+ (p.ej. las alertas de aniversario de
     `engine.insights`) debe reutilizar esta función o `fecha_cambio_a_mantenimiento`
     en vez de reinventar la aritmética de fechas — dos implementaciones
     distintas del mismo concepto pueden divergir en años bisiestos o fechas
@@ -117,7 +117,7 @@ def meses_transcurridos(fecha_efecto: date, fecha_referencia: date) -> int:
 
 
 def fecha_cambio_a_mantenimiento(fecha_efecto: date) -> date:
-    """Primera fecha en la que `meses_transcurridos(fecha_efecto, ref) >= 12`.
+    """Fecha del primer aniversario usada como punto de revisión.
 
     Coincide exactamente con el criterio de `meses_transcurridos` (mismo
     mes/día un año después), salvo cuando ese día no existe en el mes
@@ -163,8 +163,8 @@ def estimar_comision_poliza(
     """Estima la comisión de una póliza dado su tipo, sin necesidad de Liquidación.
 
     `fecha_referencia` (por defecto hoy) se usa para determinar si la póliza
-    lleva 12 meses o más activa y le toca ya el % de mantenimiento (año 2+)
-    en vez del % de producción (primer año).
+    lleva 12 meses o más activa. Para Salud, el porcentaje aplicado en año
+    2+ sigue pendiente de validar con una Liquidación real.
     """
     tipo = clasificar_poliza(fila_poliza, contrato)
     razon_social = fila_poliza["razon_social"]
@@ -214,7 +214,7 @@ def estimar_comision_poliza(
             nota = "Salud prepago anual: comisión íntegra en el mes de efecto."
         else:
             confianza = "media"
-            nota = f"Salud prepago anual: póliza en año 2+, % de mantenimiento. {nota_pendiente_ano2}"
+            nota = f"Salud prepago anual: póliza en año 2+, porcentaje aplicado pendiente de validar. {nota_pendiente_ano2}"
         return EstimacionComision(
             poliza=fila_poliza["poliza"],
             tipo=tipo,

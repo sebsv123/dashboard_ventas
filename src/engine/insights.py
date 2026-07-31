@@ -1,4 +1,4 @@
-"""Insights históricos: evolución de producción, rankings y alertas de tarifa.
+"""Insights históricos: evolución de producción, rankings y alertas de aniversario.
 
 A diferencia de la mayoría de pestañas del dashboard (que respetan el
 selector de periodo), Insights siempre mira TODO el histórico que haya en
@@ -280,10 +280,7 @@ def alertas_cambio_tarifa(
     df_polizas: pd.DataFrame, contrato: ContratoConfig, fecha_referencia: date
 ) -> list[AlertaCambioTarifa]:
     """Pólizas de salud mensual a menos de `contrato.dias_antelacion_cambio_tarifa`
-    días de pasar a % mantenimiento.
-
-    Información accionable real: saber que la comisión de una póliza va a
-    bajar pronto (de % producción a % mantenimiento del año 2 en adelante).
+    días de su primer aniversario, para revisar la siguiente Liquidación.
     """
     if df_polizas.empty:
         return []
@@ -314,8 +311,8 @@ def alertas_cambio_tarifa(
                     fecha_efecto=fecha_efecto,
                     dias_para_cambio=dias_para_cambio,
                     nota=(
-                        f"Cumple 1 año el {aniversario.isoformat()}: pasa de % "
-                        "producción a % mantenimiento (estimación, confirmar en Liquidación)."
+                        f"Cumple 12 meses el {aniversario:%d/%m/%Y}. Revisar la próxima "
+                        "Liquidación para confirmar el porcentaje aplicado."
                     ),
                 )
             )

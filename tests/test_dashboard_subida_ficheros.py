@@ -81,6 +81,27 @@ def test_subir_varios_facturacion_a_la_vez_y_uploader_se_vacia(tmp_path, monkeyp
     assert fu_tras_procesar.value == []
 
 
+def test_mensaje_eiac_muestra_altas_nuevas_y_no_total_como_creadas(tmp_path, monkeypatch):
+    db_path = _nueva_db(tmp_path, "mensaje_eiac.db")
+    at = _iniciar_app(db_path, monkeypatch)
+
+    eiac = _uploader(at, "eiac_")
+    eiac.upload(
+        "EIAC-ENV-POLI.xml", (FIXTURES / "eiac_polizas_sample.xml").read_bytes(), "application/xml"
+    )
+    eiac.upload(
+        "EIAC-ENV-RECI.xml", (FIXTURES / "eiac_recibos_sample.xml").read_bytes(), "application/xml"
+    )
+    at.run()
+    at.sidebar.button[0].click().run()
+
+    mensajes_eiac = [s.value for s in at.success if s.value.startswith("EIAC:")]
+    assert mensajes_eiac
+    assert "pólizas provisionales nuevas" in mensajes_eiac[0]
+    assert "pólizas provisionales creadas" not in mensajes_eiac[0]
+    assert "Total provisional en Pólizas" in mensajes_eiac[0]
+
+
 def test_resumen_ficheros_cargados_muestra_periodos_por_tipo(tmp_path, monkeypatch):
     db_path = _nueva_db(tmp_path, "resumen_cargados.db")
     at = _iniciar_app(db_path, monkeypatch)

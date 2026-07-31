@@ -26,6 +26,7 @@ DIAS_MINIMOS_PARA_PROYECCION_FIABLE = 8
 @dataclass
 class ProyeccionCierreMes:
     produccion_proyectada: float
+    produccion_vida_fija: float
     ritmo_diario: float
     dias_transcurridos: int
     dias_totales: int
@@ -62,25 +63,33 @@ def proyectar_cierre_mes(
     )
 
     objetivo = rappel_proyectado.objetivo_mes
+    base_rappel = rappel_proyectado.produccion_mes
+    detalle_vida = (
+        " La producción nueva de Vida detectada se mantiene fija; no se proyecta por ritmo diario."
+        if produccion_mes_vida
+        else ""
+    )
     if not objetivo:
         mensaje = (
             f"A este ritmo, cerrarías el mes con ~{produccion_proyectada:,.0f}€ de "
-            f"producción, lo que te daría un rappel estimado de "
-            f"~{rappel_proyectado.importe:,.0f}€."
+            f"producción Salud (base de rappel: ~{base_rappel:,.0f}€), lo que te daría un rappel "
+            f"estimado de ~{rappel_proyectado.importe:,.0f}€.{detalle_vida}"
         )
     elif produccion_proyectada >= objetivo:
         mensaje = (
             f"A este ritmo vas a superar el objetivo del tramo: cerrarías el mes "
-            f"con ~{produccion_proyectada:,.0f}€ de producción, lo que te daría un "
-            f"rappel estimado de ~{rappel_proyectado.importe:,.0f}€. Sigue así."
+            f"con ~{produccion_proyectada:,.0f}€ de producción Salud (base de rappel: "
+            f"~{base_rappel:,.0f}€), lo que te daría un "
+            f"rappel estimado de ~{rappel_proyectado.importe:,.0f}€. Sigue así.{detalle_vida}"
         )
     else:
-        pct = produccion_proyectada / objetivo * 100
+        pct = base_rappel / objetivo * 100
         mensaje = (
             f"A este ritmo, cerrarías el mes con ~{produccion_proyectada:,.0f}€ de "
-            f"producción ({pct:.0f}% del objetivo del tramo), lo que te daría un "
+            f"producción Salud ({pct:.0f}% del objetivo del tramo), con una base de rappel "
+            f"de ~{base_rappel:,.0f}€, lo que te daría un "
             f"rappel estimado de ~{rappel_proyectado.importe:,.0f}€. Todavía puedes "
-            f"acelerar el ritmo para mejorar esa cifra."
+            f"acelerar el ritmo para mejorar esa cifra.{detalle_vida}"
         )
 
     if dia_actual_del_mes < DIAS_MINIMOS_PARA_PROYECCION_FIABLE:
@@ -93,6 +102,7 @@ def proyectar_cierre_mes(
 
     return ProyeccionCierreMes(
         produccion_proyectada=produccion_proyectada,
+        produccion_vida_fija=produccion_mes_vida,
         ritmo_diario=round(ritmo_diario, 2),
         dias_transcurridos=dia_actual_del_mes,
         dias_totales=dias_totales_del_mes,

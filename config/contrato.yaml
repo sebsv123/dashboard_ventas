@@ -102,6 +102,10 @@ codigos_producto:
 rappel:
   # Rappel mensual inicial (Anexo II, punto 1)
   inicial:
+    # false mantiene el criterio conservador vigente. true es una hipótesis
+    # experimental pendiente de confirmar con Liquidaciones o contrato: Vida
+    # no genera rappel propio; solo entraría su producción nueva en la base Salud.
+    incluir_produccion_vida: false
     tramos:
       # meses relativos al inicio del contrato (mes 1 = dic 2025)
       - { desde_mes: 1,  hasta_mes: 12, objetivo_prima_anualizada_mes: 2500 }
@@ -156,10 +160,9 @@ periodo_devengo:
 alertas:
   dias_margen_antes_de_alertar: 45   # días desde fecha de efecto sin aparecer
                                        # en Liquidación antes de marcar "revisar"
-  dias_antelacion_cambio_tarifa: 60  # aviso de "cambio de tarifa próximo" en
-                                       # Insights: pólizas de salud mensual a
-                                       # menos de estos días de cumplir 1 año
-                                       # (paso de % producción a % mantenimiento)
+  dias_antelacion_cambio_tarifa: 60  # aviso en Insights para revisar pólizas
+                                       # de salud mensual próximas a cumplir
+                                       # 12 meses; no confirma un cambio de %
 
 # -----------------------------------------------------------------------------
 # Objetivos propios de Sebastián — no vienen del contrato de ASISA, pero

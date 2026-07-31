@@ -125,7 +125,9 @@ def test_alertas_cambio_tarifa_usa_fecha_cambio_a_mantenimiento_compartida(
     # de días independiente que pueda desincronizarse.
     alertas = alertas_cambio_tarifa(df_polizas, contrato, date(2027, 4, 15))
     esperado = fecha_cambio_a_mantenimiento(date(2026, 6, 1))
-    assert f"Cumple 1 año el {esperado.isoformat()}" in alertas[0].nota
+    assert f"Cumple 12 meses el {esperado:%d/%m/%Y}" in alertas[0].nota
+    assert "Revisar la próxima Liquidación" in alertas[0].nota
+    assert "mantenimiento" not in alertas[0].nota.lower()
     assert alertas[0].dias_para_cambio == (esperado - date(2027, 4, 15)).days
 
 

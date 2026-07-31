@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 
 import pandas as pd
 
 from engine.config_contrato import ContratoConfig
 from engine.insights import construir_produccion_polizas
+
+
+@dataclass(frozen=True)
+class ResultadoCargaPolizasProvisionalesEiac:
+    """Resultado de una carga EIAC, separado de los metadatos del UPSERT."""
+
+    nuevas: int
+    actualizadas: int
+    sin_cambios: int
+    ignoradas_oficiales: int
+    total_provisionales: int
 
 
 def _fecha_a_texto(valor):
@@ -86,53 +98,62 @@ def cargar_polizas(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     return filas_insertadas
 
 
-def cargar_polizas_provisionales_eiac(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
-    """Inserta pólizas PROVISIONALES (origen='EIAC'), o ACTUALIZA una fila
-    provisional ya existente si llegan mejores datos de EIAC (p.ej. el
-    ramo/entidad, que ahora permite asumir un % de comisión por defecto
-    donde antes no se podía) — pero nunca toca una fila ya OFICIAL: la
-    cláusula `WHERE origen = 'EIAC'` bloquea el UPDATE si la fila que ya
-    hay en `polizas` viene del CSV (`ON CONFLICT ... DO UPDATE` con WHERE
-    que no se cumple no actualiza nada, mismo patrón que
-    `cargar_eiac_recibos` usa para la prioridad CO > PE).
+def _normalizar_valor_negocio(valor):
+    """Convierte nulos y fechas de pandas a una representación comparable."""
+    if valor is None or pd.isna(valor):
+        return None
+    if isinstance(valor, pd.Timestamp):
+        return valor.date().isoformat()
+    if hasattr(valor, "isoformat"):
+        return valor.isoformat()
+    return valor
+
+
+def cargar_polizas_provisionales_eiac(
+    conn: sqlite3.Connection, df: pd.DataFrame
+) -> ResultadoCargaPolizasProvisionalesEiac:
+    """Carga EIAC sin alterar una póliza oficial y clasifica cada resultado.
+
+    Solo los campos de negocio participan en la comparación. Así, una
+    relectura idéntica no se presenta como actualización por metadatos de
+    importación ni por diferencias de representación de ``NaN``/``NaT``.
     """
-    filas_actualizadas = 0
+    columnas = (
+        "cliente_codigo", "razon_social", "producto_base", "producto_codigo",
+        "fecha_emision", "fecha_efecto", "fecha_baja", "forma_pago", "situacion",
+        "provincia_tomador", "delegacion", "nombre_tomador", "nota_origen",
+    )
+    nuevas = actualizadas = sin_cambios = ignoradas_oficiales = 0
     cur = conn.cursor()
     for _, r in df.iterrows():
-        cur.execute(
-            """
-            INSERT INTO polizas
-                (poliza, cliente_codigo, razon_social, producto_base, producto_codigo,
-                 fecha_emision, fecha_efecto, fecha_baja, forma_pago, situacion,
-                 provincia_tomador, delegacion, nombre_tomador, origen, nota_origen)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(poliza) DO UPDATE SET
-                cliente_codigo=excluded.cliente_codigo,
-                razon_social=excluded.razon_social,
-                producto_base=excluded.producto_base,
-                producto_codigo=excluded.producto_codigo,
-                fecha_emision=excluded.fecha_emision,
-                fecha_efecto=excluded.fecha_efecto,
-                fecha_baja=excluded.fecha_baja,
-                forma_pago=excluded.forma_pago,
-                situacion=excluded.situacion,
-                provincia_tomador=excluded.provincia_tomador,
-                delegacion=excluded.delegacion,
-                nombre_tomador=excluded.nombre_tomador,
-                nota_origen=excluded.nota_origen
-            WHERE origen = 'EIAC'
-            """,
-            (
-                r["poliza"], r["cliente_codigo"], r["razon_social"], r["producto_base"],
-                r["producto_codigo"], _fecha_a_texto(r["fecha_emision"]),
-                _fecha_a_texto(r["fecha_efecto"]), _fecha_a_texto(r["fecha_baja"]),
-                r["forma_pago"], r["situacion"], r["provincia_tomador"],
-                r["delegacion"], r["nombre_tomador"], r["origen"], r["nota_origen"],
-            ),
-        )
-        filas_actualizadas += cur.rowcount
+        valores = tuple(_normalizar_valor_negocio(r[c]) for c in columnas)
+        existente = cur.execute(
+            f"SELECT origen, {', '.join(columnas)} FROM polizas WHERE poliza = ?", (r["poliza"],)
+        ).fetchone()
+        if existente is None:
+            cur.execute(
+                f"INSERT INTO polizas (poliza, {', '.join(columnas)}, origen) "
+                f"VALUES (?, {', '.join('?' for _ in columnas)}, 'EIAC')",
+                (r["poliza"], *valores),
+            )
+            nuevas += 1
+        elif existente[0] != "EIAC":
+            ignoradas_oficiales += 1
+        elif tuple(_normalizar_valor_negocio(v) for v in existente[1:]) == valores:
+            sin_cambios += 1
+        else:
+            cur.execute(
+                f"UPDATE polizas SET {', '.join(f'{c} = ?' for c in columnas)} WHERE poliza = ?",
+                (*valores, r["poliza"]),
+            )
+            actualizadas += 1
     conn.commit()
-    return filas_actualizadas
+    total_provisionales = cur.execute(
+        "SELECT COUNT(*) FROM polizas WHERE origen = 'EIAC'"
+    ).fetchone()[0]
+    return ResultadoCargaPolizasProvisionalesEiac(
+        nuevas, actualizadas, sin_cambios, ignoradas_oficiales, total_provisionales
+    )
 
 
 def cargar_liquidacion(conn: sqlite3.Connection, df: pd.DataFrame) -> int:

@@ -252,7 +252,7 @@ def test_rappel_cuenta_poliza_de_fin_de_mes_en_su_periodo_real(tmp_path, monkeyp
     # 40€ de prima mensual anualizada = 480€ — debe aparecer como
     # producción del mes EN CURSO (periodo_liquidacion), aunque fecha_efecto
     # caiga en el mes calendario anterior.
-    assert metricas["Producción estimada del mes"] == "480.00 €"
+    assert metricas["Producción nueva Salud"] == "480.00 €"
 
 
 def test_vista_rapida_avisa_si_mes_siguiente_no_tiene_datos_y_suma_bien_el_actual(
@@ -314,7 +314,7 @@ def test_vista_rapida_avisa_si_mes_siguiente_no_tiene_datos_y_suma_bien_el_actua
 
     # Mes actual: sí hay datos -> suma correctamente (40€ x12 = 480€).
     metricas = {m.label: m.value for m in at.metric}
-    assert metricas["Producción detectada"] == "480.00 €"
+    assert metricas["Producción nueva Salud"] == "480.00 €"
 
 
 def test_resumen_no_mezcla_rappel_de_salud_y_vida(tmp_path, monkeypatch):
@@ -463,15 +463,18 @@ def test_vista_rapida_muestra_comision_bruta_bruto_y_neto(tmp_path, monkeypatch)
     assert at.exception == []
 
     metricas = {m.label: m.value for m in at.metric}
-    assert _valor_a_float(metricas["Producción detectada"]) == pytest.approx(480.0)
+    assert _valor_a_float(metricas["Producción nueva Salud"]) == pytest.approx(480.0)
 
-    comision_bruta = _valor_a_float(metricas["Comisión bruta estimada"])
+    comision_salud = _valor_a_float(metricas["Comisión Salud estimada"])
+    comision_vida = _valor_a_float(metricas["Comisión Vida estimada"])
     rappel = _valor_a_float(metricas["Rappel estimado"])
     total_bruto = _valor_a_float(metricas["Total bruto (comisión + rappel)"])
     total_neto = _valor_a_float(metricas["💰 Total NETO estimado"])
 
     # ASISA PARTICULARES, primer año: 25% de producción (config/contrato.yaml).
-    assert comision_bruta == pytest.approx(480.0 * 0.25)
+    assert comision_salud == pytest.approx(480.0 * 0.25)
+    assert comision_vida == pytest.approx(0.0)
+    comision_bruta = comision_salud + comision_vida
     assert total_bruto == pytest.approx(round(comision_bruta + rappel, 2))
     # Retención IRPF actual del YAML: 15%.
     assert total_neto == pytest.approx(round(total_bruto * 0.85, 2))
@@ -508,9 +511,11 @@ def test_produccion_confirmada_meses_futuros_aparece_con_datos_eiac(tmp_path, mo
     assert any("Producción confirmada" in md.value for md in at.markdown)
     assert any(f"Periodo futuro · {periodo_futuro}" in md.value for md in at.markdown)
 
-    metricas = {m.label: m.value for m in at.metric}
     # 50€ recibo, ClaseFormaPago=CC -> pista mensual -> anualizado x12 = 600€.
-    assert _valor_a_float(metricas["Producción detectada"]) == pytest.approx(600.0)
+    assert any(
+        m.label == "Producción nueva Salud" and _valor_a_float(m.value) == pytest.approx(600.0)
+        for m in at.metric
+    )
 
 
 def test_produccion_confirmada_meses_futuros_no_aparece_sin_datos(tmp_path, monkeypatch):

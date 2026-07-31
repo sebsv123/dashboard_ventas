@@ -207,6 +207,25 @@ def test_estimar_comision_y_rappel_periodo_sin_altas_da_todo_cero(contrato):
     assert resultado.total_neto == aplicar_retencion(resultado.rappel.importe, contrato)
 
 
+def test_estimar_periodo_separa_salud_vida_y_recibo_recurrente(contrato):
+    altas = pd.DataFrame([
+        {"poliza": "S", "forma_pago": "A", "razon_social": "ASISA PARTICULARES", "fecha_efecto": date(2026, 4, 1), "prima_neta": 500.0},
+        {"poliza": "VN", "forma_pago": "M", "razon_social": "ASISA VIDA TRANQUILIDAD", "fecha_efecto": date(2026, 4, 1), "prima_neta": 10.0},
+    ])
+    recibos = pd.DataFrame([
+        {"poliza": "VN", "forma_pago": "M", "razon_social": "ASISA VIDA TRANQUILIDAD", "fecha_efecto": date(2026, 4, 1), "prima_neta": 10.0},
+        {"poliza": "VR", "forma_pago": "M", "razon_social": "ASISA VIDA TRANQUILIDAD", "fecha_efecto": date(2025, 10, 1), "prima_neta": 20.0},
+    ])
+    resultado = estimar_comision_y_rappel_periodo(altas, contrato, "2026-04", recibos)
+    assert resultado.produccion_salud == 500.0
+    assert resultado.produccion_vida == 120.0  # solo la nueva Vida
+    assert resultado.comision_salud == 125.0
+    assert resultado.comision_vida == 18.0  # 10*60% + 20*60%; incluye la recurrente
+    assert resultado.comision_bruta == resultado.comision_salud + resultado.comision_vida
+    assert resultado.total_bruto == resultado.comision_bruta + resultado.rappel.importe
+    assert resultado.total_neto == pytest.approx(resultado.total_bruto * (1 - contrato.retencion_irpf))
+
+
 # --- Vida: comisión de recibos recurrentes (no solo primera alta) ----------
 
 def _fusion_altas_julio_real():

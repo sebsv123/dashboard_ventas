@@ -9,11 +9,10 @@ Dos componentes independientes:
 IMPORTANTE — fórmula del rappel inicial calibrada solo parcialmente:
 en los extremos (min/max) cuadra con los datos reales, pero en un tramo
 intermedio (febrero 2026: producción 1.565,56€ -> rappel real 1.041,20€,
-mientras la fórmula simple predice ~563€) no cuadra. La hipótesis de trabajo
-es que la "producción" del rappel cuenta TODOS los ramos (incluida ASISA
-Vida), tal como dice el contrato ("...en todos los ramos"), pero no está
-confirmado con datos. Por eso el resultado de esta función siempre viene
-con un nivel de "confianza" explícito — no lo mostramos como un hecho.
+mientras la fórmula simple predice ~563€) no cuadra. La posible inclusión de
+Vida se controla explícitamente por configuración y queda desactivada hasta
+confirmarla con datos. Por eso el resultado de esta función siempre viene con
+un nivel de "confianza" explícito — no lo mostramos como un hecho.
 """
 
 from __future__ import annotations
@@ -34,6 +33,9 @@ class ResultadoRappelInicial:
     importe: float
     objetivo_mes: float
     produccion_mes: float
+    produccion_mes_salud: float
+    produccion_mes_vida: float
+    incluye_produccion_vida: bool
     porcentaje_objetivo: float
     es_mes_formacion: bool
     confianza: str  # "alta" (tope min/max) | "media" (tramo intermedio, sin calibrar)
@@ -48,22 +50,33 @@ def calcular_rappel_inicial(
 ) -> ResultadoRappelInicial:
     """Calcula el rappel inicial estimado de un mes.
 
-    `produccion_mes_salud` y `produccion_mes_vida` son la suma de prima
-    anualizada de nuevas altas del mes (todos los ramos, según el contrato).
+    Las dos producciones son primas anualizadas de nuevas altas. La
+    configuración decide si Vida entra en la base; ASISA Vida nunca recibe
+    un rappel separado.
     """
     inicio = contrato.inicio_contrato
     mes_n = meses_desde_inicio(fecha_referencia, inicio)
     rappel_cfg = contrato.rappel_inicial
+    incluye_vida = rappel_cfg.incluir_produccion_vida
+    produccion_total = produccion_mes_salud + (produccion_mes_vida if incluye_vida else 0.0)
+    nota_vida = (
+        "La producción nueva de Vida se incluye por configuración experimental."
+        if incluye_vida
+        else "La producción de Vida no se incluye en el rappel porque esta regla sigue pendiente de confirmación."
+    )
 
     if mes_n <= contrato.vigencia["meses_formacion"]:
         return ResultadoRappelInicial(
             importe=rappel_cfg.base_100pct,
             objetivo_mes=0.0,
-            produccion_mes=produccion_mes_salud + produccion_mes_vida,
+            produccion_mes=produccion_total,
+            produccion_mes_salud=produccion_mes_salud,
+            produccion_mes_vida=produccion_mes_vida,
+            incluye_produccion_vida=incluye_vida,
             porcentaje_objetivo=0.0,
             es_mes_formacion=True,
             confianza="alta",
-            nota="Mes de formación: rappel plano sin exigir objetivo.",
+            nota=f"Mes de formación: rappel plano sin exigir objetivo. {nota_vida}",
         )
 
     tramo = next(
@@ -71,15 +84,13 @@ def calcular_rappel_inicial(
         rappel_cfg.tramos[-1],  # si supera el último tramo, se queda en el último
     )
     objetivo = tramo.objetivo_prima_anualizada_mes
-    produccion_total = produccion_mes_salud + produccion_mes_vida
-
     importe_bruto = rappel_cfg.base_100pct * (produccion_total / objetivo)
     importe = max(rappel_cfg.minimo, min(rappel_cfg.maximo, importe_bruto))
     porcentaje = produccion_total / objetivo if objetivo else 0.0
 
     en_extremo = importe in (rappel_cfg.minimo, rappel_cfg.maximo)
     confianza = "alta" if en_extremo else "media"
-    nota = (
+    nota_calculo = (
         "Estimación en el tope (min/max), validada contra datos reales."
         if en_extremo
         else (
@@ -93,10 +104,13 @@ def calcular_rappel_inicial(
         importe=round(importe, 2),
         objetivo_mes=objetivo,
         produccion_mes=produccion_total,
+        produccion_mes_salud=produccion_mes_salud,
+        produccion_mes_vida=produccion_mes_vida,
+        incluye_produccion_vida=incluye_vida,
         porcentaje_objetivo=round(porcentaje * 100, 1),
         es_mes_formacion=False,
         confianza=confianza,
-        nota=nota,
+        nota=f"{nota_calculo} {nota_vida}",
     )
 
 

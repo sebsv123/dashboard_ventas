@@ -265,7 +265,7 @@ def _mostrar_bloque_produccion_periodo(periodo: str, etiqueta: str) -> None:
     _altas_periodo = primeras_altas_por_periodo(df_facturacion_con_eiac)
     _altas_periodo = _altas_periodo[_altas_periodo["periodo_liquidacion"] == periodo]
     # Inner join, igual criterio que resumen_produccion_periodo de arriba:
-    # solo altas que sí cruzan con Pólizas, para que "Producción detectada"
+    # solo altas que sí cruzan con Pólizas, para que las métricas de producción
     # y el resto de cifras de este bloque partan del mismo conjunto de filas.
     _fusion_periodo = _altas_periodo.merge(df_polizas_con_eiac, on="poliza", how="inner")
     # TODOS los recibos del periodo (no solo primeras altas) -- Vida
@@ -276,16 +276,22 @@ def _mostrar_bloque_produccion_periodo(periodo: str, etiqueta: str) -> None:
         _fusion_periodo, contrato, periodo, _fusion_recibos_periodo
     )
 
-    cm1, cm2 = st.columns(2)
-    cm1.metric("Producción detectada", f"{_resumen.produccion_salud:,.2f} €")
-    cm2.metric(
+    cm1, cm2, cm3 = st.columns(3)
+    cm1.metric("Producción nueva Salud", f"{_estimacion.produccion_salud:,.2f} €")
+    cm2.metric("Producción nueva Vida", f"{_estimacion.produccion_vida:,.2f} €")
+    cm3.metric("Producción computada para rappel", f"{_estimacion.rappel.produccion_mes:,.2f} €", help=_estimacion.rappel.nota)
+    cm4, cm5, cm6 = st.columns(3)
+    cm4.metric("Comisión Salud estimada", f"{_estimacion.comision_salud:,.2f} €")
+    cm5.metric(
+        "Comisión Vida estimada", f"{_estimacion.comision_vida:,.2f} €",
+        help="Incluye todos los recibos de Vida del periodo, también los recurrentes de pólizas vendidas en meses anteriores.",
+    )
+    cm6.metric(
         "Rappel estimado",
         f"{_estimacion.rappel.importe:,.2f} €",
         help=_estimacion.rappel.nota,
     )
-    cm3, cm4 = st.columns(2)
-    cm3.metric("Comisión bruta estimada", f"{_estimacion.comision_bruta:,.2f} €")
-    cm4.metric("Total bruto (comisión + rappel)", f"{_estimacion.total_bruto:,.2f} €")
+    st.metric("Total bruto (comisión + rappel)", f"{_estimacion.total_bruto:,.2f} €")
 
     st.metric(
         "💰 Total NETO estimado",
@@ -436,14 +442,18 @@ with st.sidebar:
                 resultado_integracion = integrar_eiac(
                     df_eiac_polizas_bd, df_eiac_recibos_bd, df_polizas_bd, df_facturacion_bd
                 )
-                n_provisionales = cargar_polizas_provisionales_eiac(
+                carga_provisionales = cargar_polizas_provisionales_eiac(
                     conn, resultado_integracion.polizas_provisionales
                 )
-                if n_provisionales:
-                    mensajes.append(
-                        f"EIAC: {n_provisionales} póliza(s) provisional(es) creada(s) en "
-                        "Pólizas (pendientes de confirmar con el CSV oficial)."
-                    )
+                mensajes.append(
+                    "EIAC: "
+                    f"{carga_provisionales.nuevas} pólizas provisionales nuevas, "
+                    f"{carga_provisionales.actualizadas} actualizadas y "
+                    f"{carga_provisionales.sin_cambios} sin cambios. Total provisional "
+                    f"en Pólizas: {carga_provisionales.total_provisionales}."
+                    + (f" {carga_provisionales.ignoradas_oficiales} ignoradas por existir ya como oficiales."
+                       if carga_provisionales.ignoradas_oficiales else "")
+                )
                 if resultado_integracion.no_reconocidos:
                     mensajes.append(
                         f"⚠️ EIAC: {len(resultado_integracion.no_reconocidos)} IdPoliza no "
@@ -483,7 +493,7 @@ with st.sidebar:
                 f"**EIAC (TIREA):** {len(df_eiac_polizas)} póliza(s), "
                 f"{len(df_eiac_recibos)} recibo(s) (deduplicados) · "
                 f"{n_provisionales_bd} póliza(s) provisional(es) en Pólizas "
-                "pendientes de confirmar con el CSV oficial"
+                "en total de cartera, pendientes de confirmar con el CSV oficial"
             )
         if _resultado_eiac.no_reconocidos:
             st.warning(
@@ -741,20 +751,24 @@ with tab_rappel:
     estimacion_mes = estimar_comision_y_rappel_periodo(fusion_mes, contrato, mes_texto, fusion_recibos_mes)
     resultado_rappel = estimacion_mes.rappel
     produccion_salud = estimacion_mes.produccion_salud
+    produccion_vida = estimacion_mes.produccion_vida
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Producción estimada del mes", f"{resultado_rappel.produccion_mes:,.2f} €")
-    c2.metric("Objetivo del tramo", f"{resultado_rappel.objetivo_mes:,.2f} €")
-    c3.metric(
+    c1.metric("Producción nueva Salud", f"{estimacion_mes.produccion_salud:,.2f} €")
+    c2.metric("Producción nueva Vida", f"{estimacion_mes.produccion_vida:,.2f} €")
+    c3.metric("Producción computada para rappel", f"{resultado_rappel.produccion_mes:,.2f} €", help=resultado_rappel.nota)
+    c4, c5, c6 = st.columns(3)
+    c4.metric("Comisión Salud estimada", f"{estimacion_mes.comision_salud:,.2f} €")
+    c5.metric("Comisión Vida estimada", f"{estimacion_mes.comision_vida:,.2f} €", help="Incluye todos los recibos de Vida del periodo, también los recurrentes de pólizas vendidas en meses anteriores.")
+    c6.metric(
         "Rappel estimado",
         f"{resultado_rappel.importe:,.2f} €",
         help=resultado_rappel.nota,
     )
 
-    c4, c5, c6 = st.columns(3)
-    c4.metric("Comisión bruta estimada", f"{estimacion_mes.comision_bruta:,.2f} €")
-    c5.metric("Total bruto (comisión + rappel)", f"{estimacion_mes.total_bruto:,.2f} €")
-    c6.metric(
+    c7, c8 = st.columns(2)
+    c7.metric("Total bruto (comisión + rappel)", f"{estimacion_mes.total_bruto:,.2f} €")
+    c8.metric(
         "💰 Total NETO estimado",
         f"{estimacion_mes.total_neto:,.2f} €",
         help=(
@@ -794,6 +808,7 @@ with tab_rappel:
         dias_totales_del_mes=dias_totales_mes,
         contrato=contrato,
         fecha_referencia=hoy,
+        produccion_mes_vida=produccion_vida,
     )
     cp1, cp2 = st.columns(2)
     cp1.metric("Producción proyectada a fin de mes", f"{proyeccion.produccion_proyectada:,.2f} €")
@@ -928,19 +943,21 @@ with tab_insights:
             st.plotly_chart(fig_prov, width="stretch")
 
     st.divider()
-    st.markdown("### Próximos cambios de tarifa")
+    st.markdown("### Pólizas próximas a cumplir 12 meses")
     st.caption(
         f"Pólizas de salud mensual a menos de {contrato.dias_antelacion_cambio_tarifa} "
-        "días de cumplir su primer año: van a pasar de % producción a % mantenimiento."
+        "días de cumplir su primer aniversario. Podría cambiar el criterio o porcentaje de comisión, "
+        "pero todavía no está confirmado con una Liquidación real. El motor no aplica automáticamente "
+        "el porcentaje de mantenimiento."
     )
     alertas_tarifa = alertas_cambio_tarifa(df_polizas, contrato, date.today())
     if not alertas_tarifa:
-        st.success("✅ Ninguna póliza próxima a cambiar de tarifa ahora mismo.")
+        st.success("✅ Ninguna póliza próxima a cumplir 12 meses ahora mismo.")
     else:
         for a in alertas_tarifa:
             st.warning(
                 f"Póliza {a.poliza} ({a.razon_social}): {a.dias_para_cambio} días "
-                f"para el cambio de tarifa. {a.nota}"
+                f"para cumplir 12 meses. {a.nota}"
             )
 
 # =============================================================================

@@ -124,3 +124,14 @@ def test_proyeccion_un_dia_menos_del_umbral_si_avisa(contrato):
         fecha_referencia=date(2026, 4, 7),
     )
     assert "poco fiable" in proyeccion.mensaje.lower()
+
+
+def test_proyeccion_vida_detectada_es_fija_y_respeta_regla_rappel(contrato):
+    proyeccion = proyectar_cierre_mes(
+        produccion_acumulada_hasta_hoy=1000.0, dia_actual_del_mes=15, dias_totales_del_mes=30,
+        contrato=contrato, fecha_referencia=date(2026, 4, 15), produccion_mes_vida=500.0,
+    )
+    assert proyeccion.produccion_proyectada == 2000.0  # solo Salud se proyecta
+    assert proyeccion.produccion_vida_fija == 500.0
+    assert proyeccion.rappel_proyectado.produccion_mes == 2000.0  # Vida excluida por defecto
+    assert "Vida detectada se mantiene fija" in proyeccion.mensaje

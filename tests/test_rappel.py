@@ -1,5 +1,6 @@
 from datetime import date
 from pathlib import Path
+import copy
 
 import pytest
 
@@ -55,6 +56,26 @@ def test_rappel_tramo_intermedio_marca_confianza_media(contrato):
     )
     assert 300 < resultado.importe < 1200
     assert resultado.confianza == "media"
+
+
+def test_rappel_excluye_vida_por_defecto_e_incluye_si_se_activa(contrato):
+    conservador = calcular_rappel_inicial(
+        contrato, date(2026, 4, 15), produccion_mes_salud=1000.0, produccion_mes_vida=500.0
+    )
+    assert conservador.produccion_mes == 1000.0
+    assert conservador.produccion_mes_salud == 1000.0
+    assert conservador.produccion_mes_vida == 500.0
+    assert conservador.incluye_produccion_vida is False
+    assert "no se incluye" in conservador.nota
+
+    experimental_contrato = copy.deepcopy(contrato)
+    experimental_contrato.rappel["inicial"]["incluir_produccion_vida"] = True
+    experimental = calcular_rappel_inicial(
+        experimental_contrato, date(2026, 4, 15), produccion_mes_salud=1000.0, produccion_mes_vida=500.0
+    )
+    assert experimental.produccion_mes == 1500.0
+    assert experimental.incluye_produccion_vida is True
+    assert "configuración experimental" in experimental.nota
 
 
 def test_rappel_mix_requiere_las_4_columnas_simultaneamente(contrato):

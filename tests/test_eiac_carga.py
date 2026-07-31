@@ -104,8 +104,11 @@ def test_cargar_polizas_provisionales_eiac_inserta_con_origen(conn):
         df_polizas_eiac, df_recibos_eiac, pd.DataFrame()
     )
 
-    n = cargar_polizas_provisionales_eiac(conn, provisionales)
-    assert n == 3
+    resultado = cargar_polizas_provisionales_eiac(conn, provisionales)
+    assert resultado.nuevas == 3
+    assert resultado.actualizadas == 0
+    assert resultado.sin_cambios == 0
+    assert resultado.total_provisionales == 3
 
     fila = pd.read_sql(
         "SELECT * FROM polizas WHERE poliza = ?", conn, params=("9876542",)
@@ -138,8 +141,9 @@ def test_cargar_polizas_provisionales_eiac_nunca_sobreescribe_oficial(conn):
             }
         ]
     )
-    n = cargar_polizas_provisionales_eiac(conn, provisional)
-    assert n == 0  # INSERT OR IGNORE: ya existía, no se toca
+    resultado = cargar_polizas_provisionales_eiac(conn, provisional)
+    assert resultado.ignoradas_oficiales == 1
+    assert resultado.total_provisionales == 0
 
     fila = pd.read_sql(
         "SELECT razon_social, origen, nota_origen FROM polizas WHERE poliza = ?",
@@ -148,3 +152,25 @@ def test_cargar_polizas_provisionales_eiac_nunca_sobreescribe_oficial(conn):
     assert fila["razon_social"] == "ASISA PARTICULARES"  # dato oficial intacto
     assert fila["origen"] == "ASISA_CSV"  # sigue siendo la oficial
     assert fila["nota_origen"] is None
+
+
+def test_carga_provisional_eiac_clasifica_nuevas_sin_cambios_y_actualizadas(conn):
+    filas = pd.DataFrame([
+        {
+            "poliza": f"EIAC-{n}", "cliente_codigo": str(n), "razon_social": "ASISA PARTICULARES",
+            "producto_base": "SALUD", "producto_codigo": "101049", "fecha_emision": pd.NaT,
+            "fecha_efecto": pd.Timestamp("2026-07-01"), "fecha_baja": None, "forma_pago": "M",
+            "situacion": "A", "provincia_tomador": None, "delegacion": "MADRID",
+            "nombre_tomador": None, "origen": "EIAC", "nota_origen": "Provisional",
+        }
+        for n in range(1, 5)
+    ])
+    primera = cargar_polizas_provisionales_eiac(conn, filas)
+    assert (primera.nuevas, primera.actualizadas, primera.sin_cambios, primera.total_provisionales) == (4, 0, 0, 4)
+    segunda = cargar_polizas_provisionales_eiac(conn, filas.copy())
+    assert (segunda.nuevas, segunda.actualizadas, segunda.sin_cambios, segunda.total_provisionales) == (0, 0, 4, 4)
+
+    modificada = filas.copy()
+    modificada.loc[0, "delegacion"] = "SEVILLA"
+    tercera = cargar_polizas_provisionales_eiac(conn, modificada)
+    assert (tercera.nuevas, tercera.actualizadas, tercera.sin_cambios, tercera.total_provisionales) == (0, 1, 3, 4)
