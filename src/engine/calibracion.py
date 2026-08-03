@@ -29,7 +29,13 @@ from datetime import date
 
 import pandas as pd
 
-from engine.comisiones import aplicar_retencion, estimar_comision_poliza, refinar_confianza_producto_asumido
+from engine.comisiones import (
+    EstadoAnualizacionSalud,
+    aplicar_retencion,
+    estimar_comision_poliza,
+    obtener_estado_anualizacion_salud,
+    refinar_confianza_producto_asumido,
+)
 from engine.config_contrato import ContratoConfig
 from engine.insights import primeras_altas_por_periodo
 from engine.rappel import ResultadoRappelInicial, calcular_rappel_inicial
@@ -83,6 +89,7 @@ class EstimacionPeriodo:
     rappel: ResultadoRappelInicial
     total_bruto: float
     total_neto: float
+    exclusiones_anualizacion_salud: list[EstadoAnualizacionSalud] = field(default_factory=list)
 
 
 def estimar_comision_y_rappel_periodo(
@@ -90,6 +97,7 @@ def estimar_comision_y_rappel_periodo(
     contrato: ContratoConfig,
     periodo: str,
     fusion_recibos_periodo: pd.DataFrame | None = None,
+    df_liquidacion: pd.DataFrame | None = None,
 ) -> EstimacionPeriodo:
     """Estima comisión bruta + rappel + total neto de un periodo.
 
@@ -139,11 +147,17 @@ def estimar_comision_y_rappel_periodo(
     comision_vida = 0.0
     produccion_salud = 0.0
     produccion_vida = 0.0
+    exclusiones_anualizacion_salud: list[EstadoAnualizacionSalud] = []
     for _, fila in fusion_altas.iterrows():
         if fila.get("situacion") not in (None, "A"):
             continue  # anulada/baja: no cuenta como producción de este periodo
         es_vida = fila["razon_social"] in contrato.comisiones_vida
         prima_anual = fila["prima_neta"] if fila["forma_pago"] == "A" else fila["prima_neta"] * 12
+        if not es_vida and fila["forma_pago"] != "A" and df_liquidacion is not None:
+            estado = obtener_estado_anualizacion_salud(df_liquidacion, fila["poliza"], periodo)
+            if estado.anualizacion_vigente:
+                exclusiones_anualizacion_salud.append(estado)
+                continue
         # Si se pasa fusion_recibos_periodo, Vida se calcula aparte más
         # abajo con TODOS sus recibos del periodo — no sumar aquí también
         # la primera alta o se contaría dos veces.
@@ -197,6 +211,7 @@ def estimar_comision_y_rappel_periodo(
         rappel=rappel,
         total_bruto=round(total_bruto, 2),
         total_neto=total_neto,
+        exclusiones_anualizacion_salud=exclusiones_anualizacion_salud,
     )
 
 
@@ -205,6 +220,7 @@ def calcular_calibracion(
     df_facturacion: pd.DataFrame,
     df_factura_pdf: pd.DataFrame,
     contrato: ContratoConfig,
+    df_liquidacion: pd.DataFrame | None = None,
 ) -> ResultadoCalibracion:
     """Compara, periodo a periodo, el estimado del motor contra el real de
     Factura PDF — solo para los periodos donde ambas fuentes están completas.
@@ -262,7 +278,7 @@ def calcular_calibracion(
         fusion_recibos_periodo = recibos_periodo.merge(df_polizas, on="poliza", how="left")
 
         estimaciones[periodo] = estimar_comision_y_rappel_periodo(
-            fusion, contrato, periodo, fusion_recibos_periodo
+            fusion, contrato, periodo, fusion_recibos_periodo, df_liquidacion
         ).total_neto
         reales[periodo] = real_total
 

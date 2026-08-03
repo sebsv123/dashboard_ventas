@@ -273,7 +273,7 @@ def _mostrar_bloque_produccion_periodo(periodo: str, etiqueta: str) -> None:
     _recibos_periodo = df_facturacion_con_eiac[df_facturacion_con_eiac["periodo_liquidacion"] == periodo]
     _fusion_recibos_periodo = _recibos_periodo.merge(df_polizas_con_eiac, on="poliza", how="inner")
     _estimacion = estimar_comision_y_rappel_periodo(
-        _fusion_periodo, contrato, periodo, _fusion_recibos_periodo
+        _fusion_periodo, contrato, periodo, _fusion_recibos_periodo, df_liquidacion
     )
 
     cm1, cm2, cm3 = st.columns(3)
@@ -304,6 +304,7 @@ def _mostrar_bloque_produccion_periodo(periodo: str, etiqueta: str) -> None:
         ),
     )
     _aviso_comision_sin_razon_social(_fusion_periodo)
+    _mostrar_avisos_anualizacion_previa(_estimacion)
     _mostrar_aviso_historial_irregular(periodo)
 
 
@@ -336,6 +337,31 @@ def _mostrar_aviso_historial_irregular(periodo: str) -> None:
             ),
             width="stretch",
             hide_index=True,
+        )
+
+
+def _mostrar_avisos_anualizacion_previa(estimacion) -> None:
+    """Explica exclusiones de producción sin cambiar la vigencia de pólizas."""
+    if not estimacion.exclusiones_anualizacion_salud:
+        return
+    st.warning(
+        "⚠️ Algunas pólizas no se incluyen como nueva producción porque ya consta "
+        "una anualización previa vigente. Siguen vigentes; el recibo actual se conserva "
+        "como movimiento de cartera."
+    )
+    with st.expander("Ver exclusiones por anualización previa"):
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Póliza": estado.poliza,
+                    "Periodo anualización previa": estado.periodo_anualizacion,
+                    "Comisión anualizada (€)": estado.importe_anualizacion,
+                    "Motivo": estado.motivo,
+                    "Recibo actual": "Conservado como movimiento de cartera",
+                }
+                for estado in estimacion.exclusiones_anualizacion_salud
+            ]),
+            width="stretch", hide_index=True,
         )
 
 
@@ -748,7 +774,9 @@ with tab_rappel:
 
     # Misma función que Calibración y Vista rápida — no duplicar la fórmula
     # de comisión/rappel/neto en cada pestaña (ver engine.calibracion).
-    estimacion_mes = estimar_comision_y_rappel_periodo(fusion_mes, contrato, mes_texto, fusion_recibos_mes)
+    estimacion_mes = estimar_comision_y_rappel_periodo(
+        fusion_mes, contrato, mes_texto, fusion_recibos_mes, df_liquidacion
+    )
     resultado_rappel = estimacion_mes.rappel
     produccion_salud = estimacion_mes.produccion_salud
     produccion_vida = estimacion_mes.produccion_vida
@@ -784,6 +812,7 @@ with tab_rappel:
             "(sin Facturación/Pólizas oficial de este periodo)."
         )
     _aviso_comision_sin_razon_social(fusion_mes)
+    _mostrar_avisos_anualizacion_previa(estimacion_mes)
 
     if resultado_rappel.confianza == "media":
         st.warning(
@@ -1215,7 +1244,9 @@ with tab_calibracion:
         "el mes está en curso."
     )
 
-    resultado_calibracion = calcular_calibracion(df_polizas, df_facturacion, df_factura_pdf, contrato)
+    resultado_calibracion = calcular_calibracion(
+        df_polizas, df_facturacion, df_factura_pdf, contrato, df_liquidacion
+    )
 
     if not resultado_calibracion.periodos and not resultado_calibracion.excluidos:
         st.info("Sube al menos una Factura PDF para poder calibrar el motor.")

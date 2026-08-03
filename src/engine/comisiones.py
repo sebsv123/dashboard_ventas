@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import calendar
 import dataclasses
+import unicodedata
 from dataclasses import dataclass
 from datetime import date
 
@@ -59,6 +60,79 @@ class EstimacionComision:
     comision_bruta_estimada: float
     confianza: str  # "alta" | "media" | "baja"
     nota: str = ""
+
+
+@dataclass(frozen=True)
+class EstadoAnualizacionSalud:
+    """Estado histórico de un anticipo anualizado antes de un periodo."""
+
+    poliza: str
+    anualizacion_vigente: bool
+    periodo_anualizacion: str | None = None
+    importe_anualizacion: float | None = None
+    motivo: str = ""
+
+
+def _normalizar_accion_liquidacion(accion: object) -> str:
+    """Normaliza espacios, mayúsculas y tildes de las acciones ASISA."""
+    texto = unicodedata.normalize("NFKD", str(accion or ""))
+    texto = "".join(c for c in texto if not unicodedata.combining(c))
+    return " ".join(texto.upper().split())
+
+
+def obtener_estado_anualizacion_salud(
+    df_liquidacion: pd.DataFrame, poliza: str, periodo_estimado: str
+) -> EstadoAnualizacionSalud:
+    """Indica si una Salud mensual ya tenía un anticipo anual vigente.
+
+    Solo se consideran movimientos anteriores al periodo estimado. Se ordenan
+    por ``fecha_desde`` cuando existe y, si falta, por periodo de Liquidación
+    normalizado (AAAA-MM), preservando el orden estable de origen como último
+    desempate. Un ``EXTORNO ANUALIZADA`` solo reduce el saldo si su comisión
+    es negativa; otros ajustes, incluido ``A DESCONTAR``, no lo cancelan.
+    """
+    if df_liquidacion.empty or "poliza" not in df_liquidacion.columns:
+        return EstadoAnualizacionSalud(poliza, False)
+
+    periodo_limite = _periodo_liquidacion_ordenable(periodo_estimado)
+    movimientos = df_liquidacion[df_liquidacion["poliza"] == poliza].copy()
+    if movimientos.empty or "periodo_liquidacion" not in movimientos.columns:
+        return EstadoAnualizacionSalud(poliza, False)
+    movimientos["_periodo"] = movimientos["periodo_liquidacion"].map(_periodo_liquidacion_ordenable)
+    movimientos = movimientos[movimientos["_periodo"] < periodo_limite]
+    if movimientos.empty:
+        return EstadoAnualizacionSalud(poliza, False)
+
+    movimientos["_fecha"] = pd.to_datetime(movimientos.get("fecha_desde"), errors="coerce")
+    movimientos["_fecha_orden"] = movimientos["_fecha"].fillna(
+        pd.to_datetime(movimientos["_periodo"] + "-01", errors="coerce")
+    )
+    movimientos["_orden_estable"] = range(len(movimientos))
+    movimientos = movimientos.sort_values(["_fecha_orden", "_periodo", "_orden_estable"], na_position="last")
+
+    saldo = 0.0
+    ultima_positiva = None
+    for _, movimiento in movimientos.iterrows():
+        accion = _normalizar_accion_liquidacion(movimiento.get("accion"))
+        importe = movimiento.get("comision")
+        comision = 0.0 if importe is None or pd.isna(importe) else float(importe)
+        es_extorno_anualizada = "EXTORNO" in accion and "ANUALIZADA" in accion
+        es_anualizada_positiva = "ANUALIZADA" in accion and not es_extorno_anualizada and comision > 0
+        if es_anualizada_positiva:
+            saldo += comision
+            ultima_positiva = movimiento
+        elif es_extorno_anualizada and comision < 0:
+            saldo = max(0.0, saldo + comision)
+
+    if saldo <= 0.005 or ultima_positiva is None:
+        return EstadoAnualizacionSalud(poliza, False)
+    return EstadoAnualizacionSalud(
+        poliza=poliza,
+        anualizacion_vigente=True,
+        periodo_anualizacion=ultima_positiva["periodo_liquidacion"],
+        importe_anualizacion=float(ultima_positiva["comision"]),
+        motivo="anualización previa vigente",
+    )
 
 
 def clasificar_poliza(fila_poliza: pd.Series, contrato: ContratoConfig) -> str:
@@ -262,7 +336,7 @@ class HistorialAjustesPoliza:
     ultimo_accion: str | None = None
 
 
-def _periodo_liquidacion_ordenable(periodo: str) -> str:
+def _periodo_liquidacion_ordenable(periodo: object) -> str:
     """Normaliza un periodo de Liquidación a "AAAA-MM" para poder ordenar
     cronológicamente.
 
@@ -272,9 +346,9 @@ def _periodo_liquidacion_ordenable(periodo: str) -> str:
     (4 dígitos es el año) en vez de asumir un orden fijo (mismo criterio
     que `_formatear_periodos` en el dashboard).
     """
-    partes = str(periodo).split("-")
+    partes = str(periodo or "").split("-")
     if len(partes) != 2:
-        return str(periodo)
+        return str(periodo or "")
     a, b = partes
     return f"{a}-{b}" if len(a) == 4 else f"{b}-{a}"
 

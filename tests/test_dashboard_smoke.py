@@ -315,6 +315,9 @@ def test_vista_rapida_avisa_si_mes_siguiente_no_tiene_datos_y_suma_bien_el_actua
     # Mes actual: sí hay datos -> suma correctamente (40€ x12 = 480€).
     metricas = {m.label: m.value for m in at.metric}
     assert metricas["Producción nueva Salud"] == "480.00 €"
+    # Este caso solo tiene Salud: Vista rápida debe seguir renderizando la
+    # métrica Vida con cero y sin AttributeError en el objeto del motor.
+    assert metricas["Producción nueva Vida"] == "0.00 €"
 
 
 def test_resumen_no_mezcla_rappel_de_salud_y_vida(tmp_path, monkeypatch):

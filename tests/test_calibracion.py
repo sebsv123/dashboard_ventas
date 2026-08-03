@@ -191,6 +191,24 @@ def test_estimar_comision_y_rappel_periodo_desglose_completo(contrato):
     )
 
 
+def test_estimacion_periodo_expone_contrato_salud_vida_incluso_sin_vida(contrato):
+    """El objeto real debe mantener el contrato que consume Vista rápida."""
+    con_vida = estimar_comision_y_rappel_periodo(_fusion_altas_enero(), contrato, "2026-01")
+    sin_vida = estimar_comision_y_rappel_periodo(
+        _fusion_altas_enero().query("poliza == 'P1'"), contrato, "2026-01"
+    )
+
+    for resultado in (con_vida, sin_vida):
+        assert hasattr(resultado, "produccion_salud")
+        assert hasattr(resultado, "produccion_vida")
+        assert hasattr(resultado, "comision_salud")
+        assert hasattr(resultado, "comision_vida")
+        assert resultado.comision_bruta == resultado.comision_salud + resultado.comision_vida
+
+    assert sin_vida.produccion_vida == 0.0
+    assert sin_vida.comision_vida == 0.0
+
+
 def test_estimar_comision_y_rappel_periodo_neto_aplica_retencion_configurada(contrato):
     resultado = estimar_comision_y_rappel_periodo(_fusion_altas_enero(), contrato, "2026-01")
     # Retención actual del YAML: 15%. Comprobación directa, no solo vía aplicar_retencion,
