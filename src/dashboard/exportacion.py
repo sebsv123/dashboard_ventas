@@ -203,9 +203,13 @@ def _hoja_wanderlust(
 
 
 def _hoja_calibracion(
-    df_polizas: pd.DataFrame, df_facturacion: pd.DataFrame, df_factura_pdf: pd.DataFrame, contrato: ContratoConfig
+    df_polizas: pd.DataFrame,
+    df_facturacion: pd.DataFrame,
+    df_factura_pdf: pd.DataFrame,
+    contrato: ContratoConfig,
+    df_liquidacion: pd.DataFrame,
 ) -> pd.DataFrame:
-    resultado = calcular_calibracion(df_polizas, df_facturacion, df_factura_pdf, contrato)
+    resultado = calcular_calibracion(df_polizas, df_facturacion, df_factura_pdf, contrato, df_liquidacion)
     filas = [
         {
             "Periodo": p.mes,
@@ -279,7 +283,7 @@ def construir_excel_completo(
         _hoja_wanderlust(df_polizas, df_facturacion, contrato, hoy).to_excel(
             writer, sheet_name="Wanderlust PAE", index=False
         )
-        _hoja_calibracion(df_polizas, df_facturacion, df_factura_pdf, contrato).to_excel(
+        _hoja_calibracion(df_polizas, df_facturacion, df_factura_pdf, contrato, df_liquidacion).to_excel(
             writer, sheet_name="Calibracion", index=False
         )
 
