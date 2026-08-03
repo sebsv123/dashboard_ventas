@@ -102,6 +102,41 @@ class EstimacionPeriodo:
     exclusiones_anualizacion_salud: list[EstadoAnualizacionSalud] = field(default_factory=list)
 
 
+def _fecha_relevante_produccion(fila: pd.Series):
+    """Fecha del propio movimiento: `fecha_desde` del recibo (Facturación)
+    si está disponible, si no `fecha_efecto` de la póliza (caso de
+    `fusion_altas`, que no trae `fecha_desde` -- ver
+    `engine.insights.primeras_altas_por_periodo`, que solo devuelve
+    poliza/periodo_liquidacion/prima_neta)."""
+    fecha_desde = fila.get("fecha_desde")
+    if fecha_desde is not None and not pd.isna(fecha_desde):
+        return fecha_desde
+    return fila.get("fecha_efecto")
+
+
+def _excluir_por_anulacion(fila: pd.Series) -> bool:
+    """Pólizas no activas (`situacion != "A"`) se excluyen de producción/
+    comisión/rappel del periodo de su propia anulación EN ADELANTE, pero
+    NO de los periodos anteriores a `fecha_baja` -- la comisión ganada
+    antes de anularse fue real y ASISA la sigue pagando (caso real: póliza
+    64171931, 24,69€ de un recibo 10/06-19/06/2026, anulada el 19/06/2026).
+
+    Sin `fecha_baja` conocida (anulada pero sin fecha, o columna ausente
+    por compatibilidad con llamadas/tests antiguos) se mantiene el
+    criterio conservador anterior: excluir directamente.
+    """
+    situacion = fila.get("situacion")
+    if situacion in (None, "A"):
+        return False
+    fecha_baja = fila.get("fecha_baja")
+    if fecha_baja is None or pd.isna(fecha_baja):
+        return True
+    fecha_relevante = _fecha_relevante_produccion(fila)
+    if fecha_relevante is None or pd.isna(fecha_relevante):
+        return True
+    return pd.Timestamp(fecha_relevante) > pd.Timestamp(fecha_baja)
+
+
 def estimar_comision_y_rappel_periodo(
     fusion_altas: pd.DataFrame,
     contrato: ContratoConfig,
@@ -136,19 +171,20 @@ def estimar_comision_y_rappel_periodo(
     antes de este fix, para no romper llamadas que todavía no lo pasen.
 
     PÓLIZAS NO ACTIVAS (situacion != "A") SE EXCLUYEN de producción/
-    comisión/rappel, aunque su alta o recibo caiga dentro del periodo —
-    una póliza anulada no debe seguir sumando al periodo en que se
-    vendió. Bug real encontrado en julio 2026: la póliza 64171931 (ASISA
-    Travel and You) llegó por EIAC con `ClasePoliza=AN`/
-    `SituacionPoliza=EX` (anulada, `FechaAnulacion` real) DESPUÉS de su
-    alta original — el motor no filtraba por `situacion` en ningún punto
-    de esta cadena, así que si esa póliza hubiera tenido algún recibo
-    (no lo tuvo, por eso el caso real no llegó a inflar ningún número en
-    pantalla) habría seguido contando. El filtro se hace aquí, sobre
-    `fila["situacion"]` si la columna está presente en `fusion_altas`/
-    `fusion_recibos_periodo` (viene ya incluida al fusionar con Pólizas
-    completo) — si no está presente (llamadas/tests antiguos sin esa
-    columna), se cuenta igual que antes, por compatibilidad.
+    comisión/rappel del periodo de su propia anulación EN ADELANTE, pero
+    SIGUEN CONTANDO en los periodos ANTERIORES a `fecha_baja` — una
+    póliza anulada no debe seguir sumando producción futura, pero la
+    comisión que ya ganó antes de anularse fue real y ASISA la paga igual
+    (ver `_excluir_por_anulacion`). Bug real encontrado en julio 2026: la
+    póliza 64171931 (ASISA Travel and You) llegó por EIAC con
+    `ClasePoliza=AN`/`SituacionPoliza=EX` (anulada, `FechaAnulacion` real)
+    DESPUÉS de su alta original — el motor no filtraba por `situacion` en
+    ningún punto de esta cadena. El primer fix (ago-2026) excluía la
+    póliza entera sin mirar fechas, lo cual escondía sin querer 24,69€ de
+    comisión real de un recibo cobrado ANTES de la anulación (10/06 a
+    19/06/2026, Liquidación real de junio) — corregido comparando la
+    fecha del propio movimiento (`fecha_desde` del recibo si está, si no
+    `fecha_efecto`) contra `fecha_baja`.
     """
     anio, mes = (int(x) for x in periodo.split("-"))
     fecha_ref = date(anio, mes, 1)
@@ -159,8 +195,8 @@ def estimar_comision_y_rappel_periodo(
     produccion_vida = 0.0
     exclusiones_anualizacion_salud: list[EstadoAnualizacionSalud] = []
     for _, fila in fusion_altas.iterrows():
-        if fila.get("situacion") not in (None, "A"):
-            continue  # anulada/baja: no cuenta como producción de este periodo
+        if _excluir_por_anulacion(fila):
+            continue  # anulada/baja: excluida desde su periodo de anulación en adelante
         es_vida = fila["razon_social"] in contrato.comisiones_vida
         prima_anual = fila["prima_neta"] if fila["forma_pago"] == "A" else fila["prima_neta"] * 12
         if not es_vida and fila["forma_pago"] != "A" and df_liquidacion is not None:
@@ -194,8 +230,8 @@ def estimar_comision_y_rappel_periodo(
             fusion_recibos_periodo["razon_social"].isin(contrato.comisiones_vida.keys())
         ]
         for _, fila in recibos_vida.iterrows():
-            if fila.get("situacion") not in (None, "A"):
-                continue  # anulada/baja: no cuenta como producción de este periodo
+            if _excluir_por_anulacion(fila):
+                continue  # anulada/baja: excluida desde su periodo de anulación en adelante
             prima_recibo = fila["prima_neta"]
             estimacion_vida = estimar_comision_poliza(
                 fila, contrato, prima_anual=prima_recibo * 12,

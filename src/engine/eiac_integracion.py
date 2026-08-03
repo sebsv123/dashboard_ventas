@@ -447,7 +447,12 @@ def construir_polizas_provisionales_desde_eiac(
                 "producto_codigo": None,
                 "fecha_emision": _a_fecha(p.get("fecha_emision")),
                 "fecha_efecto": _a_fecha(p.get("fecha_efecto_inicial")),
-                "fecha_baja": None,
+                # Fecha real de anulación (DatosAnulacion/FechaAnulacion) si
+                # la hay -- necesaria para que el filtro de anulación de
+                # engine.calibracion pueda distinguir producción/comisión
+                # ANTERIOR a la anulación (cuenta) de la POSTERIOR (no
+                # cuenta), caso real: póliza 64171931.
+                "fecha_baja": _a_fecha(p.get("fecha_anulacion")),
                 "forma_pago": forma_pago,
                 "situacion": situacion,
                 "provincia_tomador": None,

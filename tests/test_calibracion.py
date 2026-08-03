@@ -357,6 +357,96 @@ def test_estimar_comision_y_rappel_periodo_sin_columna_situacion_cuenta_igual_qu
     assert resultado.produccion_salud == pytest.approx(500.0)
 
 
+# --- Anulación: cuenta ANTES de fecha_baja, se excluye DESDE fecha_baja -----
+# Caso real: póliza 64171931 (ASISA Travel and You), alta 10/06/2026,
+# anulada el 19/06/2026 (FechaAnulacion real vía EIAC) -- Liquidación real
+# de junio muestra un recibo COBRADO 10/06-19/06/2026 con 24,69€ de
+# comisión, ANTERIOR a la anulación. El primer fix (ago-2026) excluía la
+# póliza entera por "situacion" sin mirar fechas, escondiendo esos 24,69€
+# reales. Ahora debe contar en su periodo real (junio) y solo dejar de
+# contar en periodos posteriores a la anulación.
+
+
+def test_alta_de_poliza_anulada_cuenta_si_es_anterior_a_fecha_baja(contrato):
+    fusion = pd.DataFrame(
+        [
+            {"poliza": "64171931", "forma_pago": "A", "razon_social": "ASISA TRAVEL AND YOU",
+             "fecha_efecto": date(2026, 6, 10), "prima_neta": 123.43, "situacion": "B",
+             "fecha_baja": date(2026, 6, 19)},
+        ]
+    )
+    resultado = estimar_comision_y_rappel_periodo(fusion, contrato, "2026-06")
+    est_esperada = estimar_comision_poliza(
+        pd.Series({"poliza": "64171931", "forma_pago": "A", "razon_social": "ASISA TRAVEL AND YOU",
+                   "fecha_efecto": date(2026, 6, 10)}),
+        contrato, prima_anual=123.43, fecha_referencia=date(2026, 6, 1),
+    )
+    assert resultado.comision_bruta == pytest.approx(est_esperada.comision_bruta_estimada)
+    assert resultado.comision_bruta > 0.0
+
+
+def test_alta_de_poliza_anulada_no_cuenta_si_es_posterior_a_fecha_baja(contrato):
+    # Misma póliza, pero con una "alta" (recibo) posterior a su propia
+    # anulación -- producción futura de una anulada, el caso que el
+    # primer fix (ago-2026) ya arreglaba y que este cambio NO debe
+    # reintroducir.
+    fusion = pd.DataFrame(
+        [
+            {"poliza": "64171931", "forma_pago": "A", "razon_social": "ASISA TRAVEL AND YOU",
+             "fecha_efecto": date(2026, 7, 1), "prima_neta": 123.43, "situacion": "B",
+             "fecha_baja": date(2026, 6, 19)},
+        ]
+    )
+    resultado = estimar_comision_y_rappel_periodo(fusion, contrato, "2026-07")
+    assert resultado.comision_bruta == 0.0
+    assert resultado.produccion_salud == 0.0
+
+
+def test_recibo_vida_de_poliza_anulada_cuenta_si_es_anterior_a_fecha_baja(contrato):
+    fusion_recibos = pd.DataFrame(
+        [
+            {"poliza": "VIDA-ANULADA", "forma_pago": "M", "razon_social": "ASISA VIDA TRANQUILIDAD",
+             "fecha_efecto": date(2026, 5, 15), "fecha_desde": date(2026, 6, 1),
+             "prima_neta": 28.29, "situacion": "B", "fecha_baja": date(2026, 6, 19)},
+        ]
+    )
+    resultado = estimar_comision_y_rappel_periodo(
+        pd.DataFrame(columns=["poliza"]), contrato, "2026-06", fusion_recibos
+    )
+    assert resultado.comision_bruta > 0.0
+
+
+def test_recibo_vida_de_poliza_anulada_no_cuenta_si_es_posterior_a_fecha_baja(contrato):
+    fusion_recibos = pd.DataFrame(
+        [
+            {"poliza": "VIDA-ANULADA", "forma_pago": "M", "razon_social": "ASISA VIDA TRANQUILIDAD",
+             "fecha_efecto": date(2026, 5, 15), "fecha_desde": date(2026, 7, 1),
+             "prima_neta": 28.29, "situacion": "B", "fecha_baja": date(2026, 6, 19)},
+        ]
+    )
+    resultado = estimar_comision_y_rappel_periodo(
+        pd.DataFrame(columns=["poliza"]), contrato, "2026-07", fusion_recibos
+    )
+    assert resultado.comision_bruta == 0.0
+
+
+def test_poliza_anulada_sin_fecha_baja_se_excluye_como_antes(contrato):
+    # Sin fecha_baja conocida (anulada pero sin fecha, o columna ausente):
+    # criterio conservador anterior -- se excluye directamente. Cubre el
+    # caso ya existente de test_estimar_comision_y_rappel_periodo_excluye_
+    # alta_de_poliza_anulada, ahora con la columna fecha_baja presente
+    # pero vacía (None), en vez de ausente del todo.
+    fusion = pd.DataFrame(
+        [
+            {"poliza": "ANULADA-SIN-FECHA", "forma_pago": "A", "razon_social": "ASISA TRAVEL AND YOU",
+             "fecha_efecto": date(2026, 6, 10), "prima_neta": 123.43, "situacion": "B",
+             "fecha_baja": None},
+        ]
+    )
+    resultado = estimar_comision_y_rappel_periodo(fusion, contrato, "2026-06")
+    assert resultado.comision_bruta == 0.0
+
+
 # --- Coherencia de fuentes de datos: Calibración vs. Vista rápida/Rappel ----
 
 
