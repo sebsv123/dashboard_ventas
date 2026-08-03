@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 import pandas as pd
@@ -10,6 +11,7 @@ from engine.rappel import calcular_rappel_inicial
 from datetime import date
 
 CONFIG_PATH = Path(__file__).parent.parent / "config" / "contrato.yaml"
+APP_SRC_PATH = Path(__file__).parent.parent / "src" / "dashboard" / "app.py"
 
 
 @pytest.fixture
@@ -353,3 +355,92 @@ def test_estimar_comision_y_rappel_periodo_sin_columna_situacion_cuenta_igual_qu
     # que antes de este fix.
     resultado = estimar_comision_y_rappel_periodo(_fusion_altas_enero(), contrato, "2026-01")
     assert resultado.produccion_salud == pytest.approx(500.0)
+
+
+# --- Coherencia de fuentes de datos: Calibración vs. Vista rápida/Rappel ----
+
+
+def _nombres_argumentos_posicionales(nodo_llamada: ast.Call) -> list[str | None]:
+    return [arg.id if isinstance(arg, ast.Name) else None for arg in nodo_llamada.args]
+
+
+def _llamadas_a(arbol: ast.Module, nombre_funcion: str) -> list[ast.Call]:
+    return [
+        nodo for nodo in ast.walk(arbol)
+        if isinstance(nodo, ast.Call) and isinstance(nodo.func, ast.Name) and nodo.func.id == nombre_funcion
+    ]
+
+
+def test_calibracion_usa_las_mismas_fuentes_de_datos_que_vista_rapida():
+    """Bug real (ago-2026): la pestaña Calibración llamaba a
+    calcular_calibracion() con df_polizas/df_facturacion (solo CSV oficial),
+    mientras Vista rápida y Rappel usan df_polizas_con_eiac/
+    df_facturacion_con_eiac (CSV oficial + provisionales de EIAC) para
+    construir la fusión que pasan a estimar_comision_y_rappel_periodo.
+    Ambas pestañas se supone que muestran "lo que el motor estimaría", así
+    que deben partir de la misma fuente — si no, el "Estimado" de
+    Calibración no es el número que el agente realmente ve en pantalla
+    (caso real: subestimaba julio 2026 en +1.250€ frente a Vista rápida).
+
+    Este test lee el CÓDIGO FUENTE de app.py (no ejecuta el dashboard) y
+    comprueba, a nivel de nombres de variable, que:
+    - calcular_calibracion() recibe df_polizas_con_eiac/df_facturacion_con_eiac.
+    - La exportación a Excel (que reutiliza la misma calcular_calibracion,
+      ver dashboard/exportacion.py) recibe esas mismas variables al
+      construir el Excel completo.
+    Así, si alguien vuelve a desalinearlas sin querer, este test falla en
+    vez de descubrirse semanas/meses después comparando pantallas a mano.
+    """
+    arbol = ast.parse(APP_SRC_PATH.read_text())
+
+    llamadas_calibracion = _llamadas_a(arbol, "calcular_calibracion")
+    assert llamadas_calibracion, "no se encontró ninguna llamada a calcular_calibracion en app.py"
+    for llamada in llamadas_calibracion:
+        args = _nombres_argumentos_posicionales(llamada)
+        assert args[0] == "df_polizas_con_eiac", (
+            f"calcular_calibracion() en app.py:{llamada.lineno} recibe {args[0]!r} "
+            "como 1er argumento -- debe ser df_polizas_con_eiac, la misma fuente "
+            "que usan Vista rápida/Rappel, o el 'Estimado' de Calibración deja de "
+            "ser el número que el agente ve en pantalla."
+        )
+        assert args[1] == "df_facturacion_con_eiac", (
+            f"calcular_calibracion() en app.py:{llamada.lineno} recibe {args[1]!r} "
+            "como 2º argumento -- debe ser df_facturacion_con_eiac, por el mismo motivo."
+        )
+
+    llamadas_excel = _llamadas_a(arbol, "_construir_excel_completo_cacheado")
+    assert llamadas_excel, "no se encontró ninguna llamada a _construir_excel_completo_cacheado en app.py"
+    for llamada in llamadas_excel:
+        args = _nombres_argumentos_posicionales(llamada)
+        assert args[0] == "df_polizas_con_eiac", (
+            f"_construir_excel_completo_cacheado() en app.py:{llamada.lineno} recibe "
+            f"{args[0]!r} como 1er argumento -- la hoja Calibracion del Excel exportado "
+            "reutiliza calcular_calibracion() con este mismo dato (ver "
+            "dashboard/exportacion.py::_hoja_calibracion), así que debe ser "
+            "df_polizas_con_eiac para seguir coherente con la pestaña en pantalla."
+        )
+        assert args[1] == "df_facturacion_con_eiac", (
+            f"_construir_excel_completo_cacheado() en app.py:{llamada.lineno} recibe "
+            f"{args[1]!r} como 2º argumento -- debe ser df_facturacion_con_eiac, por "
+            "el mismo motivo."
+        )
+
+    # Vista rápida y Rappel: confirmamos que sus fusiones (pasadas como 1er
+    # argumento de estimar_comision_y_rappel_periodo) se construyen a partir
+    # de un .merge(df_polizas_con_eiac, ...) -- si esto deja de ser cierto,
+    # las aserciones de arriba estarían comparando Calibración contra una
+    # Vista rápida que también cambió, sin detectar la desalineación real.
+    merges_con_eiac = [
+        nodo for nodo in ast.walk(arbol)
+        if isinstance(nodo, ast.Call)
+        and isinstance(nodo.func, ast.Attribute)
+        and nodo.func.attr == "merge"
+        and nodo.args
+        and isinstance(nodo.args[0], ast.Name)
+        and nodo.args[0].id == "df_polizas_con_eiac"
+    ]
+    assert len(merges_con_eiac) >= 2, (
+        "se esperaban al menos 2 fusiones con df_polizas_con_eiac en app.py "
+        "(Vista rápida y Rappel) -- si esto cambió, revisar que las "
+        "aserciones de coherencia de arriba sigan siendo válidas."
+    )

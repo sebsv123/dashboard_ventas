@@ -8,6 +8,16 @@ completo el dato real) habría predicho, y lo compara contra la Factura PDF
 real de ese mismo periodo. Sirve para que Sebastián sepa cuánto fiarse del
 número en pantalla mientras el mes está en curso (p.ej. "+/-15% de sesgo").
 
+IMPORTANTE (bug real, ago-2026): `df_polizas`/`df_facturacion` deben ser
+las versiones "_con_eiac" (CSV oficial + provisionales de EIAC todavía sin
+confirmar) — las MISMAS que usan Vista rápida y Rappel, nunca el CSV
+oficial a secas. El objetivo de Calibración es medir la fiabilidad del
+número que el agente REALMENTE ve en pantalla, no una versión distinta que
+no se muestra en ningún sitio. Pasar el CSV oficial a secas subestimó el
+"estimado" de julio 2026 en +1.250€ frente a Vista rápida (faltaba toda la
+producción EIAC-only de ese mes) — ver `tests/test_calibracion.py::
+test_calibracion_usa_las_mismas_fuentes_de_datos_que_vista_rapida`.
+
 IMPORTANTE: un periodo con Factura PDF real pero SIN Facturación/Pólizas
 completas (caso real: marzo 2026, que solo tiene Liquidación) se EXCLUYE
 de la comparación con una nota explícita — no es un fallo del motor, es

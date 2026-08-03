@@ -1244,8 +1244,13 @@ with tab_calibracion:
         "el mes está en curso."
     )
 
+    # df_polizas_con_eiac/df_facturacion_con_eiac -- las MISMAS fuentes que
+    # usan Vista rápida y Rappel (ver estimar_comision_y_rappel_periodo más
+    # abajo) -- para medir la fiabilidad del número que el agente realmente
+    # ve en pantalla, no una versión aparte calculada solo con el CSV
+    # oficial (bug real: subestimaba julio 2026 en +1.250€).
     resultado_calibracion = calcular_calibracion(
-        df_polizas, df_facturacion, df_factura_pdf, contrato, df_liquidacion
+        df_polizas_con_eiac, df_facturacion_con_eiac, df_factura_pdf, contrato, df_liquidacion
     )
 
     if not resultado_calibracion.periodos and not resultado_calibracion.excluidos:
