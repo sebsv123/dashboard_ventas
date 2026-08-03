@@ -47,7 +47,7 @@ from engine.comisiones import (
     refinar_confianza_producto_asumido,
 )
 from engine.config_contrato import ContratoConfig
-from engine.insights import primeras_altas_por_periodo
+from engine.insights import primeras_altas_por_periodo, siguiente_periodo
 from engine.rappel import ResultadoRappelInicial, calcular_rappel_inicial
 from engine.reconciliacion import DiferenciaEstimadoVsReal, comparar_estimado_vs_real
 
@@ -102,6 +102,70 @@ class EstimacionPeriodo:
     exclusiones_anualizacion_salud: list[EstadoAnualizacionSalud] = field(default_factory=list)
 
 
+def corregir_periodo_liquidacion_vida_mensual(
+    df_facturacion: pd.DataFrame, df_polizas: pd.DataFrame, contrato: ContratoConfig
+) -> pd.DataFrame:
+    """Corrige `periodo_liquidacion` SOLO para recibos de Vida con ciclo
+    mensual conocido (`duracion_recibo_meses` ≈ 1), cuando el valor
+    literal del CSV de Facturación no coincide con el que le corresponde
+    según su propia `fecha_desde`.
+
+    EXCEPCIÓN PUNTUAL, no una reversión de la regla general — "el CSV
+    oficial siempre gana" sigue aplicando sin cambios a Salud (y a Vida
+    con otro ciclo, p.ej. anual/prepago: `duracion_recibo_meses` != 1, ver
+    caso real póliza 64131545 más abajo). Aquí se hace una excepción
+    porque, PARA ESTE CASO CONCRETO, el ciclo es lo bastante predecible
+    (una ventana mensual exacta desde `fecha_desde`) como para reconstruir
+    el periodo correcto con certeza, sin depender de que llegue la
+    Liquidación real.
+
+    Caso real que motivó esto (ago-2026): pólizas 64110228/64110254
+    (ASISA VIDA TRANQUILIDAD), ventana fecha_desde=2026-06-15/
+    fecha_hasta=2026-07-15 etiquetada `periodo_liquidacion="2026-06"` en
+    Facturación, mientras que la Liquidación real de ASISA liquida esa
+    MISMA ventana en periodo "2026-07" — confirmado también con la ventana
+    anterior de las mismas pólizas (fecha_desde=2026-05-15, periodo real
+    "2026-06", que aquí YA coincidía con el literal). El patrón: el
+    periodo correcto es el mes siguiente al de `fecha_desde`, no el mismo
+    mes — Liquidación real NO discrepa con la regla general de ciclo
+    16→15 aplicada a `fecha_efecto` de la póliza (esa regla se mantiene
+    intacta en todo el resto del proyecto); aquí se corrige un dato
+    puntual de Facturación que resultó estar mal etiquetado en el
+    fichero de origen para estas ventanas mensuales de Vida.
+
+    NO aplica a la póliza 64131545 (AV ACCIDENTES SENIOR, Vida mensual->
+    anual prepago con `duracion_recibo_meses`=12): ahí el literal
+    "2026-06" SÍ coincide con la Liquidación real, así que forzar aquí el
+    mismo criterio mensual la habría roto — de ahí el guard explícito por
+    duración.
+    """
+    columnas_necesarias = {"poliza", "fecha_desde", "periodo_liquidacion", "duracion_recibo_meses"}
+    if df_facturacion.empty or not columnas_necesarias.issubset(df_facturacion.columns):
+        return df_facturacion
+    if df_polizas.empty or "razon_social" not in df_polizas.columns:
+        return df_facturacion
+
+    razon_social_por_poliza = df_polizas.drop_duplicates(subset="poliza", keep="last").set_index("poliza")["razon_social"]
+    razon_social = df_facturacion["poliza"].map(razon_social_por_poliza)
+
+    es_vida = razon_social.isin(contrato.comisiones_vida.keys())
+    duracion = pd.to_numeric(df_facturacion["duracion_recibo_meses"], errors="coerce")
+    es_ciclo_mensual = duracion.round(0) == 1
+    fecha_desde_valida = df_facturacion["fecha_desde"].notna()
+    aplica = es_vida & es_ciclo_mensual & fecha_desde_valida
+    if not aplica.any():
+        return df_facturacion
+
+    def _periodo_mes_siguiente(fecha_desde) -> str:
+        mes_calendario = f"{fecha_desde.year:04d}-{fecha_desde.month:02d}"
+        return siguiente_periodo(mes_calendario)
+
+    periodo_correcto = df_facturacion.loc[aplica, "fecha_desde"].apply(_periodo_mes_siguiente)
+    corregido = df_facturacion.copy()
+    corregido.loc[aplica, "periodo_liquidacion"] = periodo_correcto
+    return corregido
+
+
 def _fecha_relevante_produccion(fila: pd.Series):
     """Fecha del propio movimiento: `fecha_desde` del recibo (Facturación)
     si está disponible, si no `fecha_efecto` de la póliza (caso de
@@ -114,12 +178,28 @@ def _fecha_relevante_produccion(fila: pd.Series):
     return fila.get("fecha_efecto")
 
 
-def _excluir_por_anulacion(fila: pd.Series) -> bool:
+def _excluir_por_anulacion(fila: pd.Series, periodo: str) -> bool:
     """Pólizas no activas (`situacion != "A"`) se excluyen de producción/
     comisión/rappel del periodo de su propia anulación EN ADELANTE, pero
     NO de los periodos anteriores a `fecha_baja` -- la comisión ganada
     antes de anularse fue real y ASISA la sigue pagando (caso real: póliza
     64171931, 24,69€ de un recibo 10/06-19/06/2026, anulada el 19/06/2026).
+
+    El PERIODO que se está estimando (no `fecha_efecto`) es la referencia
+    principal: `fecha_efecto` es fija (fecha de alta original) y puede
+    quedar MUY por detrás del periodo que se está procesando cuando el
+    recibo llega tarde a Facturación -- comparar solo `fecha_efecto` contra
+    `fecha_baja` sin mirar el periodo dejaba colar producción de meses
+    posteriores a la anulación (bug real: pólizas 63930658/63933124,
+    ANULADAS el mismo día de su alta en enero 2026, cuyo único recibo llegó
+    a Facturación con `periodo_liquidacion="2026-02"` -- un mes DESPUÉS de
+    anuladas; como `fecha_efecto` también era de enero, la comparación
+    directa fecha_efecto>fecha_baja daba False y las contaba igual).
+
+    Solo cuando el periodo coincide con el mes de la propia anulación se
+    usa la fecha del movimiento concreto (`fecha_desde` del recibo si está,
+    si no `fecha_efecto`) para decidir si cayó antes o después dentro de
+    ESE mismo mes -- el caso real 64171931 de arriba.
 
     Sin `fecha_baja` conocida (anulada pero sin fecha, o columna ausente
     por compatibilidad con llamadas/tests antiguos) se mantiene el
@@ -130,6 +210,16 @@ def _excluir_por_anulacion(fila: pd.Series) -> bool:
         return False
     fecha_baja = fila.get("fecha_baja")
     if fecha_baja is None or pd.isna(fecha_baja):
+        return True
+    # pd.Timestamp() normaliza tanto Timestamp/date ya parseados como texto
+    # ISO crudo (p.ej. eiac_polizas.fecha_anulacion, que no siempre llega
+    # parseado como fecha) -- sin esto, un fecha_baja en texto rompía aquí
+    # con AttributeError al pedir .year sobre un str.
+    fecha_baja = pd.Timestamp(fecha_baja)
+    periodo_baja = f"{fecha_baja.year:04d}-{fecha_baja.month:02d}"
+    if periodo < periodo_baja:
+        return False
+    if periodo > periodo_baja:
         return True
     fecha_relevante = _fecha_relevante_produccion(fila)
     if fecha_relevante is None or pd.isna(fecha_relevante):
@@ -195,7 +285,7 @@ def estimar_comision_y_rappel_periodo(
     produccion_vida = 0.0
     exclusiones_anualizacion_salud: list[EstadoAnualizacionSalud] = []
     for _, fila in fusion_altas.iterrows():
-        if _excluir_por_anulacion(fila):
+        if _excluir_por_anulacion(fila, periodo):
             continue  # anulada/baja: excluida desde su periodo de anulación en adelante
         es_vida = fila["razon_social"] in contrato.comisiones_vida
         prima_anual = fila["prima_neta"] if fila["forma_pago"] == "A" else fila["prima_neta"] * 12
@@ -230,7 +320,7 @@ def estimar_comision_y_rappel_periodo(
             fusion_recibos_periodo["razon_social"].isin(contrato.comisiones_vida.keys())
         ]
         for _, fila in recibos_vida.iterrows():
-            if _excluir_por_anulacion(fila):
+            if _excluir_por_anulacion(fila, periodo):
                 continue  # anulada/baja: excluida desde su periodo de anulación en adelante
             prima_recibo = fila["prima_neta"]
             estimacion_vida = estimar_comision_poliza(

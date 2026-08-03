@@ -4,7 +4,11 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from engine.calibracion import calcular_calibracion, estimar_comision_y_rappel_periodo
+from engine.calibracion import (
+    calcular_calibracion,
+    corregir_periodo_liquidacion_vida_mensual,
+    estimar_comision_y_rappel_periodo,
+)
 from engine.comisiones import aplicar_retencion, estimar_comision_poliza
 from engine.config_contrato import cargar_contrato
 from engine.rappel import calcular_rappel_inicial
@@ -447,6 +451,26 @@ def test_poliza_anulada_sin_fecha_baja_se_excluye_como_antes(contrato):
     assert resultado.comision_bruta == 0.0
 
 
+def test_alta_de_poliza_anulada_no_cuenta_en_periodo_posterior_aunque_fecha_efecto_sea_anterior_a_fecha_baja(contrato):
+    # Bug real encontrado al verificar la Tarea A contra datos reales:
+    # pólizas 63930658/63933124, ANULADAS el MISMO día de su alta (enero
+    # 2026), cuyo único recibo llegó a Facturación con
+    # periodo_liquidacion="2026-02" -- un mes DESPUÉS de anuladas. Como
+    # fecha_efecto también era de enero (anterior a fecha_baja), comparar
+    # solo fecha_efecto>fecha_baja daba False y las contaba igual en
+    # febrero. El periodo que se estima debe pesar más que fecha_efecto.
+    fusion = pd.DataFrame(
+        [
+            {"poliza": "63930658", "forma_pago": "M", "razon_social": "ASISA PARTICULARES",
+             "fecha_efecto": date(2026, 1, 22), "prima_neta": 113.61, "situacion": "AN",
+             "fecha_baja": date(2026, 1, 22)},
+        ]
+    )
+    resultado = estimar_comision_y_rappel_periodo(fusion, contrato, "2026-02")
+    assert resultado.comision_bruta == 0.0
+    assert resultado.produccion_salud == 0.0
+
+
 # --- Coherencia de fuentes de datos: Calibración vs. Vista rápida/Rappel ----
 
 
@@ -534,3 +558,73 @@ def test_calibracion_usa_las_mismas_fuentes_de_datos_que_vista_rapida():
         "(Vista rápida y Rappel) -- si esto cambió, revisar que las "
         "aserciones de coherencia de arriba sigan siendo válidas."
     )
+
+
+# --- corregir_periodo_liquidacion_vida_mensual ------------------------------
+# Caso real (ago-2026): pólizas 64110228/64110254 (ASISA VIDA TRANQUILIDAD),
+# ventana fecha_desde=2026-06-15/fecha_hasta=2026-07-15 etiquetada
+# periodo_liquidacion="2026-06" en Facturación, cuando la Liquidación real
+# de ASISA liquida esa misma ventana en "2026-07". La ventana anterior
+# (fecha_desde=2026-05-15) YA tenía el periodo correcto ("2026-06") y no
+# debe tocarse.
+
+
+def test_corrige_periodo_liquidacion_de_ventana_vida_mensual_mal_etiquetada(contrato):
+    df_facturacion = pd.DataFrame(
+        [
+            {"poliza": "64110228", "fecha_desde": date(2026, 5, 15), "fecha_hasta": date(2026, 6, 15),
+             "periodo_liquidacion": "2026-06", "duracion_recibo_meses": 1.0, "prima_neta": 28.29},
+            {"poliza": "64110228", "fecha_desde": date(2026, 6, 15), "fecha_hasta": date(2026, 7, 15),
+             "periodo_liquidacion": "2026-06", "duracion_recibo_meses": 1.0, "prima_neta": 28.29},
+            {"poliza": "64110254", "fecha_desde": date(2026, 6, 15), "fecha_hasta": date(2026, 7, 15),
+             "periodo_liquidacion": "2026-06", "duracion_recibo_meses": 1.0, "prima_neta": 35.27},
+        ]
+    )
+    df_polizas = pd.DataFrame(
+        [
+            {"poliza": "64110228", "razon_social": "ASISA VIDA TRANQUILIDAD"},
+            {"poliza": "64110254", "razon_social": "ASISA VIDA TRANQUILIDAD"},
+        ]
+    )
+    corregido = corregir_periodo_liquidacion_vida_mensual(df_facturacion, df_polizas, contrato)
+
+    ventana_mayo = corregido[(corregido["poliza"] == "64110228") & (corregido["fecha_desde"] == date(2026, 5, 15))]
+    ventana_junio = corregido[(corregido["poliza"] == "64110228") & (corregido["fecha_desde"] == date(2026, 6, 15))]
+    ventana_254 = corregido[(corregido["poliza"] == "64110254") & (corregido["fecha_desde"] == date(2026, 6, 15))]
+
+    # Ventana 05-15->06-15: ya estaba correcta, no se toca.
+    assert ventana_mayo.iloc[0]["periodo_liquidacion"] == "2026-06"
+    # Ventana 06-15->07-15: mal etiquetada como "2026-06" -- ahora cuenta
+    # para julio, no junio, para AMBAS pólizas gemelas.
+    assert ventana_junio.iloc[0]["periodo_liquidacion"] == "2026-07"
+    assert ventana_254.iloc[0]["periodo_liquidacion"] == "2026-07"
+
+
+def test_no_corrige_vida_con_ciclo_anual_aunque_este_mal_etiquetada(contrato):
+    # Caso real: póliza 64131545 (AV ACCIDENTES SENIOR), Vida con prepago
+    # anual (duracion_recibo_meses=12) -- ahí el literal SÍ coincide con la
+    # Liquidación real, así que el guard de duración debe dejarla intacta
+    # aunque, hipotéticamente, no coincidiera con el criterio mensual.
+    df_facturacion = pd.DataFrame(
+        [
+            {"poliza": "64131545", "fecha_desde": date(2026, 6, 1), "fecha_hasta": date(2027, 6, 1),
+             "periodo_liquidacion": "2026-06", "duracion_recibo_meses": 12.0, "prima_neta": 162.98},
+        ]
+    )
+    df_polizas = pd.DataFrame([{"poliza": "64131545", "razon_social": "AV ACCIDENTES SENIOR"}])
+    corregido = corregir_periodo_liquidacion_vida_mensual(df_facturacion, df_polizas, contrato)
+    assert corregido.iloc[0]["periodo_liquidacion"] == "2026-06"
+
+
+def test_no_corrige_salud_mensual_aunque_el_ciclo_no_coincida(contrato):
+    # La regla general "el CSV oficial siempre gana" sigue intacta para
+    # Salud -- esta excepción es SOLO para Vida.
+    df_facturacion = pd.DataFrame(
+        [
+            {"poliza": "SALUD-1", "fecha_desde": date(2026, 6, 15), "fecha_hasta": date(2026, 7, 15),
+             "periodo_liquidacion": "2026-06", "duracion_recibo_meses": 1.0, "prima_neta": 38.65},
+        ]
+    )
+    df_polizas = pd.DataFrame([{"poliza": "SALUD-1", "razon_social": "ASISA PARTICULARES"}])
+    corregido = corregir_periodo_liquidacion_vida_mensual(df_facturacion, df_polizas, contrato)
+    assert corregido.iloc[0]["periodo_liquidacion"] == "2026-06"

@@ -30,7 +30,11 @@ from db.carga import (
     recalcular_resumen_mensual,
 )
 from db.schema import conectar, inicializar_schema
-from engine.calibracion import calcular_calibracion, estimar_comision_y_rappel_periodo
+from engine.calibracion import (
+    calcular_calibracion,
+    corregir_periodo_liquidacion_vida_mensual,
+    estimar_comision_y_rappel_periodo,
+)
 from engine.comisiones import estimar_comision_poliza, resumen_historial_ajustes_cartera
 from engine.config_contrato import cargar_contrato
 from engine.eiac_integracion import integrar_eiac
@@ -169,6 +173,13 @@ df_polizas_con_eiac = (
 df_facturacion_con_eiac = (
     pd.concat([df_facturacion, _resultado_eiac.facturacion_eiac], ignore_index=True)
     if not _resultado_eiac.facturacion_eiac.empty else df_facturacion
+)
+# Excepción puntual, solo Vida con ciclo mensual (duracion_recibo_meses==1):
+# corrige periodo_liquidacion cuando el literal del CSV no coincide con el
+# que le corresponde por su propia fecha_desde -- ver docstring de
+# corregir_periodo_liquidacion_vida_mensual (caso real 64110228/64110254).
+df_facturacion_con_eiac = corregir_periodo_liquidacion_vida_mensual(
+    df_facturacion_con_eiac, df_polizas_con_eiac, contrato
 )
 
 # --- Cabecera -----------------------------------------------------------------
