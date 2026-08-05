@@ -68,7 +68,9 @@ def test_extraer_numero_poliza_asisa_sin_guion():
 
 def test_construir_facturacion_desde_eiac_forma_correcta():
     df_recibos = parsear_eiac_recibos(FIXTURES / "eiac_recibos_sample.xml")
-    facturacion_eiac, no_reconocidos = construir_facturacion_desde_eiac(df_recibos, pd.DataFrame())
+    facturacion_eiac, no_reconocidos = construir_facturacion_desde_eiac(
+        pd.DataFrame(), df_recibos, pd.DataFrame()
+    )
 
     assert no_reconocidos == []
     assert set(facturacion_eiac["poliza"]) == {"9876541", "9876542"}
@@ -89,14 +91,18 @@ def test_construir_facturacion_desde_eiac_registra_no_reconocidos():
             }
         ]
     )
-    facturacion_eiac, no_reconocidos = construir_facturacion_desde_eiac(df_recibos, pd.DataFrame())
+    facturacion_eiac, no_reconocidos = construir_facturacion_desde_eiac(
+        pd.DataFrame(), df_recibos, pd.DataFrame()
+    )
     assert facturacion_eiac.empty
     assert len(no_reconocidos) == 1
     assert no_reconocidos[0].id_poliza_eiac == "24848-ABC"
 
 
 def test_construir_facturacion_desde_eiac_vacio_no_revienta():
-    facturacion_eiac, no_reconocidos = construir_facturacion_desde_eiac(pd.DataFrame(), pd.DataFrame())
+    facturacion_eiac, no_reconocidos = construir_facturacion_desde_eiac(
+        pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    )
     assert facturacion_eiac.empty
     assert no_reconocidos == []
 
@@ -116,7 +122,9 @@ def test_facturacion_eiac_se_puede_concatenar_con_facturacion_oficial_y_ordenar(
         ]
     )
     df_recibos = parsear_eiac_recibos(FIXTURES / "eiac_recibos_sample.xml")
-    facturacion_eiac, _ = construir_facturacion_desde_eiac(df_recibos, df_facturacion_oficial)
+    facturacion_eiac, _ = construir_facturacion_desde_eiac(
+        pd.DataFrame(), df_recibos, df_facturacion_oficial
+    )
 
     combinado = pd.concat([df_facturacion_oficial, facturacion_eiac], ignore_index=True)
     # No debe lanzar TypeError.
@@ -150,7 +158,7 @@ def test_construir_facturacion_desde_eiac_csv_oficial_gana_caso_real_63946797():
         ]
     )
     facturacion_eiac, no_reconocidos = construir_facturacion_desde_eiac(
-        df_eiac_recibos, df_facturacion_existente
+        pd.DataFrame(), df_eiac_recibos, df_facturacion_existente
     )
     assert facturacion_eiac.empty
     assert no_reconocidos == []
@@ -172,8 +180,85 @@ def test_construir_facturacion_desde_eiac_no_afecta_polizas_solo_en_eiac():
         [{"poliza": "63946797", "periodo_liquidacion": "2026-04", "prima_neta": 49.59,
           "fecha_desde": pd.Timestamp("2026-03-25")}]
     )
-    facturacion_eiac, _ = construir_facturacion_desde_eiac(df_eiac_recibos, df_facturacion_existente)
+    facturacion_eiac, _ = construir_facturacion_desde_eiac(
+        pd.DataFrame(), df_eiac_recibos, df_facturacion_existente
+    )
     assert set(facturacion_eiac["poliza"]) == {"99999999"}
+
+
+# --- construir_facturacion_desde_eiac: producción provisional por póliza ---
+# Caso real (ago-2026): pólizas 64529498/64527386/64171805, EIAC-ENV-POLI
+# con prima_neta_poliza confirmada pero SIN recibo EIAC todavía -- la
+# producción se devenga desde la fecha de efecto, no desde que llega el
+# recibo (ver docstring de construir_facturacion_desde_eiac).
+
+
+def _df_eiac_polizas_una_fila(**overrides) -> pd.DataFrame:
+    base = {
+        "id_poliza": "24847-64529498", "cliente_codigo": "24847", "numero_poliza": "64529498",
+        "situacion_poliza": "EV", "clase_poliza": "NP",
+        "fecha_efecto_inicial": date(2026, 8, 1), "fecha_emision": date(2026, 8, 1),
+        "descripcion_riesgo": "LUIS UZIEL MANCILLA RAMOS",
+        "descripcion_ramo": "Asistencia sanitaria", "codigo_entidad_interno": "Asisa",
+        "ramo_entidad": "RASA", "fecha_anulacion": None, "motivo_anulacion": None,
+        "prima_neta_poliza": 595.80,
+    }
+    base.update(overrides)
+    return pd.DataFrame([base])
+
+
+def test_construir_facturacion_desde_eiac_genera_provisional_por_poliza_sin_recibo():
+    df_eiac_polizas = _df_eiac_polizas_una_fila()
+    facturacion_eiac, no_reconocidos = construir_facturacion_desde_eiac(
+        df_eiac_polizas, pd.DataFrame(), pd.DataFrame()
+    )
+    assert no_reconocidos == []
+    assert set(facturacion_eiac["poliza"]) == {"64529498"}
+    fila = facturacion_eiac.iloc[0]
+    assert fila["prima_neta"] == pytest.approx(595.80)
+    assert fila["periodo_liquidacion"] == "2026-08"  # fecha_efecto día 1 < 16
+    assert "provisional" in fila["nota_origen"].lower()
+
+
+def test_construir_facturacion_desde_eiac_recibo_real_gana_sobre_provisional_por_poliza():
+    df_eiac_polizas = _df_eiac_polizas_una_fila()
+    df_eiac_recibos = pd.DataFrame(
+        [
+            {
+                "id_poliza": "24847-64529498", "prima_total": 100.0, "prima_neta": 90.0,
+                "situacion_recibo": "PE", "fecha_efecto_inicial": date(2026, 8, 3),
+                "clase_forma_pago": "TA", "pista_forma_pago": "posible_prepago_anual",
+            }
+        ]
+    )
+    facturacion_eiac, _ = construir_facturacion_desde_eiac(
+        df_eiac_polizas, df_eiac_recibos, pd.DataFrame()
+    )
+    # Solo UNA fila -- la del recibo real (90€), no la provisional (595,80€).
+    assert len(facturacion_eiac) == 1
+    fila = facturacion_eiac.iloc[0]
+    assert fila["prima_neta"] == pytest.approx(90.0)
+    assert fila["nota_origen"] is None
+
+
+def test_construir_facturacion_desde_eiac_no_genera_provisional_sin_prima_en_el_xml():
+    df_eiac_polizas = _df_eiac_polizas_una_fila(prima_neta_poliza=None)
+    facturacion_eiac, _ = construir_facturacion_desde_eiac(
+        df_eiac_polizas, pd.DataFrame(), pd.DataFrame()
+    )
+    assert facturacion_eiac.empty
+
+
+def test_construir_facturacion_desde_eiac_csv_oficial_gana_tambien_sobre_provisional_por_poliza():
+    df_eiac_polizas = _df_eiac_polizas_una_fila()
+    df_facturacion_existente = pd.DataFrame(
+        [{"poliza": "64529498", "periodo_liquidacion": "2026-08", "prima_neta": 595.80,
+          "fecha_desde": pd.Timestamp("2026-08-01")}]
+    )
+    facturacion_eiac, _ = construir_facturacion_desde_eiac(
+        df_eiac_polizas, pd.DataFrame(), df_facturacion_existente
+    )
+    assert facturacion_eiac.empty
 
 
 # --- construir_polizas_provisionales_desde_eiac -----------------------------
@@ -208,6 +293,70 @@ def test_construir_polizas_provisionales_marca_origen_y_nota():
     assert "pista_forma_pago" in fila["nota_origen"]
 
 
+def test_construir_polizas_provisionales_marca_nota_produccion_provisional_sin_recibo():
+    # Caso real (ago-2026): póliza con prima_neta_poliza (del XML de póliza)
+    # pero SIN ningún recibo EIAC -- la nota debe distinguirla en pantalla
+    # de una póliza cuya producción SÍ está confirmada por recibo.
+    df_polizas_eiac = pd.DataFrame(
+        [
+            {
+                "id_poliza": "24847-64529498", "cliente_codigo": "24847", "numero_poliza": "64529498",
+                "situacion_poliza": "EV", "clase_poliza": "NP",
+                "fecha_efecto_inicial": date(2026, 8, 1), "fecha_emision": date(2026, 8, 1),
+                "descripcion_riesgo": "LUIS UZIEL MANCILLA RAMOS",
+                "descripcion_ramo": "Asistencia sanitaria", "codigo_entidad_interno": "Asisa",
+                "ramo_entidad": "RASA", "fecha_anulacion": None, "motivo_anulacion": None,
+                "prima_neta_poliza": 595.80,
+            }
+        ]
+    )
+    provisionales, _ = construir_polizas_provisionales_desde_eiac(
+        df_polizas_eiac, pd.DataFrame(), pd.DataFrame()
+    )
+    fila = provisionales.iloc[0]
+    assert "PRODUCCIÓN PROVISIONAL" in fila["nota_origen"]
+    assert "595" in fila["nota_origen"]
+    # Bug real (ago-2026): sin esto, resumen_produccion_periodo/
+    # estimar_comision_y_rappel_periodo multiplican x12 una prima que YA es
+    # anual (prima_neta_poliza), porque sin recibo no hay forma_pago
+    # conocido y el default es "no es 'A' -> multiplicar x12".
+    assert fila["forma_pago"] == "A"
+
+
+def test_construir_polizas_provisionales_no_fuerza_forma_pago_si_ya_tiene_recibo():
+    # Si YA hay recibo (con su propia pista, aunque sea distinta de "A"),
+    # el forma_pago inferido del recibo debe seguir mandando -- el fallback
+    # "A" es solo para el caso sin recibo en absoluto.
+    df_polizas_eiac = pd.DataFrame(
+        [
+            {
+                "id_poliza": "24847-64529498", "cliente_codigo": "24847", "numero_poliza": "64529498",
+                "situacion_poliza": "EV", "clase_poliza": "NP",
+                "fecha_efecto_inicial": date(2026, 8, 1), "fecha_emision": date(2026, 8, 1),
+                "descripcion_riesgo": "LUIS UZIEL MANCILLA RAMOS",
+                "descripcion_ramo": "Asistencia sanitaria", "codigo_entidad_interno": "Asisa",
+                "ramo_entidad": "RASA", "fecha_anulacion": None, "motivo_anulacion": None,
+                "prima_neta_poliza": 595.80,
+            }
+        ]
+    )
+    df_eiac_recibos = pd.DataFrame(
+        [
+            {
+                "id_poliza": "24847-64529498", "prima_total": 55.0, "prima_neta": 49.65,
+                "situacion_recibo": "CO", "fecha_efecto_inicial": date(2026, 8, 1),
+                "clase_forma_pago": "CC", "pista_forma_pago": "posible_mensual",
+            }
+        ]
+    )
+    provisionales, _ = construir_polizas_provisionales_desde_eiac(
+        df_polizas_eiac, df_eiac_recibos, pd.DataFrame()
+    )
+    fila = provisionales.iloc[0]
+    assert fila["forma_pago"] == "M"
+    assert "PRODUCCIÓN PROVISIONAL" not in fila["nota_origen"]
+
+
 def test_construir_polizas_provisionales_situacion_y_fecha_efecto_futura():
     df_polizas_eiac = parsear_eiac_polizas(FIXTURES / "eiac_polizas_sample.xml")
     provisionales, _ = construir_polizas_provisionales_desde_eiac(
@@ -215,7 +364,7 @@ def test_construir_polizas_provisionales_situacion_y_fecha_efecto_futura():
     )
     fila = provisionales[provisionales["poliza"] == "9876542"].iloc[0]
     assert fila["situacion"] == "A"  # EIAC "EV" (en vigor) -> ASISA "A"
-    assert fila["fecha_efecto"] == date(2026, 9, 15)  # varios meses vista, no se filtra
+    assert fila["fecha_efecto"] == pd.Timestamp(2026, 9, 15)  # varios meses vista, no se filtra
 
     fila_baja = provisionales[provisionales["poliza"] == "9876543"].iloc[0]
     assert fila_baja["situacion"] == "B"  # EIAC "BJ" -> ASISA "B"
@@ -460,3 +609,32 @@ def test_produccion_julio_coincide_con_calculo_manual_de_los_5_casos_reales(cont
     )
     assert resumen_julio.polizas_detectadas == 5
     assert resumen_julio.produccion_salud == pytest.approx(6366.60, abs=0.01)
+
+
+def test_produccion_agosto_de_poliza_eiac_sin_recibo_no_se_multiplica_x12(contrato):
+    """Extremo a extremo, caso real (ago-2026): póliza 64529498, solo
+    EIAC-ENV-POLI (prima_neta_poliza=595,80€, ya anualizada), SIN recibo
+    EIAC. Bug real encontrado al verificar contra datos reales: sin
+    forma_pago='A' forzado (ver construir_polizas_provisionales_desde_eiac),
+    resumen_produccion_periodo multiplicaba x12 una cifra que ya era anual
+    -> 7.149,60€ en vez de 595,80€.
+    """
+    df_polizas_eiac = pd.DataFrame(
+        [
+            {
+                "id_poliza": "24847-64529498", "cliente_codigo": "24847", "numero_poliza": "64529498",
+                "situacion_poliza": "EV", "clase_poliza": "NP",
+                "fecha_efecto_inicial": date(2026, 8, 1), "fecha_emision": date(2026, 8, 1),
+                "descripcion_riesgo": "LUIS UZIEL MANCILLA RAMOS",
+                "descripcion_ramo": "Asistencia sanitaria", "codigo_entidad_interno": "Asisa",
+                "ramo_entidad": "RASA", "fecha_anulacion": None, "motivo_anulacion": None,
+                "prima_neta_poliza": 595.80,
+            }
+        ]
+    )
+    resultado = integrar_eiac(df_polizas_eiac, pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
+    resumen_agosto = resumen_produccion_periodo(
+        resultado.polizas_provisionales, resultado.facturacion_eiac, contrato, "2026-08"
+    )
+    assert resumen_agosto.polizas_detectadas == 1
+    assert resumen_agosto.produccion_salud == pytest.approx(595.80, abs=0.01)

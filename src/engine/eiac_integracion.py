@@ -191,8 +191,10 @@ RAZON_SOCIAL_VIDA_POR_DEFECTO = "ASISA VIDA TRANQUILIDAD"
 COLUMNAS_FACTURACION_EIAC = [
     "poliza", "cliente_codigo", "cartera", "producto_nombre",
     "fecha_desde", "fecha_hasta", "prima_neta", "prima_total",
-    "periodo_liquidacion", "duracion_recibo_meses",
+    "periodo_liquidacion", "duracion_recibo_meses", "nota_origen",
 ]
+
+NOTA_EIAC_POLI_PROVISIONAL = "EIAC_POLI_provisional — pendiente de recibo real"
 
 COLUMNAS_POLIZAS_PROVISIONALES = [
     "poliza", "cliente_codigo", "razon_social", "producto_base", "producto_codigo",
@@ -258,6 +260,17 @@ def _a_fecha(valor):
     return valor
 
 
+def _a_timestamp(valor) -> pd.Timestamp | None:
+    """Como `_a_fecha`, pero devuelve `pd.Timestamp` en vez de `date` --
+    necesario en columnas que se concatenan con `df_polizas` (leído con
+    `pd.read_sql(parse_dates=...)`, que usa `pd.Timestamp`): mezclar
+    `date` y `Timestamp` en la misma columna "object" la deja sin tipo
+    homogéneo y rompe la serialización a Arrow de `st.dataframe` (bug
+    real: pestaña Pólizas, columna `fecha_emision`, ago-2026)."""
+    fecha = _a_fecha(valor)
+    return pd.Timestamp(fecha) if fecha is not None else None
+
+
 def _extraer_y_registrar(id_poliza_eiac: str, no_reconocidos: list[NumeroPolizaExtraido]) -> str | None:
     resultado = extraer_numero_poliza_asisa(id_poliza_eiac)
     if not resultado.reconocido:
@@ -277,10 +290,13 @@ def _periodo_liquidacion_ciclo_16_15(fecha) -> str:
 
 
 def construir_facturacion_desde_eiac(
+    df_eiac_polizas: pd.DataFrame,
     df_eiac_recibos: pd.DataFrame,
     df_facturacion_existente: pd.DataFrame,
 ) -> tuple[pd.DataFrame, list[NumeroPolizaExtraido]]:
-    """Traduce `eiac_recibos` a la misma forma que Facturación.
+    """Traduce `eiac_recibos` a la misma forma que Facturación, y COMPLETA
+    con producción provisional desde `eiac_polizas` para pólizas que
+    todavía no tienen recibo EIAC.
 
     Se incluyen recibos "CO" y "PE" por igual: Facturación de ASISA
     tampoco distingue cobro (eso es cosa de Liquidación), así que se
@@ -293,46 +309,93 @@ def construir_facturacion_desde_eiac(
     reporte una fecha de efecto anterior — el CSV oficial gana siempre,
     tanto el periodo como el importe (ver docstring del módulo, caso real
     de las 6 pólizas de marzo).
+
+    SEGUNDO BLOQUE (ago-2026, caso real 64529498/64527386/64171805): la
+    producción se devenga desde la fecha de efecto de la póliza, no desde
+    que llega el recibo — ASISA suele enviar primero el EIAC-ENV-POLI (con
+    la prima ya confirmada, `eiac_polizas.prima_neta_poliza`) y el recibo
+    llega días o semanas después. Sin este bloque, esas pólizas eran
+    invisibles para producción/rappel mientras tanto. Una póliza entra
+    aquí SOLO si: (a) tiene `prima_neta_poliza` (si el XML no lo trajo, no
+    se inventa), (b) NO tiene ya una fila en el CSV oficial (misma
+    prioridad de arriba), y (c) NO tiene ya ningún recibo EIAC — en cuanto
+    llegue el recibo real (aunque sea "PE"), la prioridad ya existente
+    recibo > póliza (ver primer bucle) hace que esta fila provisional deje
+    de generarse automáticamente, sin lógica adicional.
     """
     no_reconocidos: list[NumeroPolizaExtraido] = []
-    if df_eiac_recibos.empty:
-        return pd.DataFrame(columns=COLUMNAS_FACTURACION_EIAC), no_reconocidos
-
     polizas_csv_oficial = (
         set(df_facturacion_existente["poliza"]) if not df_facturacion_existente.empty else set()
     )
 
     filas = []
-    for _, r in df_eiac_recibos.iterrows():
-        numero_poliza = _extraer_y_registrar(r["id_poliza"], no_reconocidos)
-        if numero_poliza is None:
-            continue
-        if numero_poliza in polizas_csv_oficial:
-            continue  # el CSV oficial ya tiene esta póliza: nunca sobrescribir ni adelantarse
-        fecha_efecto = _a_fecha(r["fecha_efecto_inicial"])
-        if fecha_efecto is None:
-            continue
+    polizas_con_recibo: set[str] = set()
+    if not df_eiac_recibos.empty:
+        for _, r in df_eiac_recibos.iterrows():
+            numero_poliza = _extraer_y_registrar(r["id_poliza"], no_reconocidos)
+            if numero_poliza is None:
+                continue
+            polizas_con_recibo.add(numero_poliza)
+            if numero_poliza in polizas_csv_oficial:
+                continue  # el CSV oficial ya tiene esta póliza: nunca sobrescribir ni adelantarse
+            fecha_efecto = _a_fecha(r["fecha_efecto_inicial"])
+            if fecha_efecto is None:
+                continue
 
-        prima_neta = r["prima_neta"] if pd.notna(r["prima_neta"]) else r["prima_total"]
-        filas.append(
-            {
-                "poliza": numero_poliza,
-                "cliente_codigo": None,
-                "cartera": "EIAC",
-                "producto_nombre": None,
-                # pd.Timestamp, no `date`: df_facturacion (leído con
-                # pd.read_sql(parse_dates=...)) usa Timestamp en
-                # fecha_desde/fecha_hasta -- mezclar date y Timestamp en la
-                # misma columna rompe sort_values al concatenar ambos
-                # DataFrames (TypeError: 'values' is not ordered).
-                "fecha_desde": pd.Timestamp(fecha_efecto),
-                "fecha_hasta": None,
-                "prima_neta": prima_neta,
-                "prima_total": r["prima_total"],
-                "periodo_liquidacion": _periodo_liquidacion_ciclo_16_15(fecha_efecto),
-                "duracion_recibo_meses": None,
-            }
-        )
+            prima_neta = r["prima_neta"] if pd.notna(r["prima_neta"]) else r["prima_total"]
+            filas.append(
+                {
+                    "poliza": numero_poliza,
+                    "cliente_codigo": None,
+                    "cartera": "EIAC",
+                    "producto_nombre": None,
+                    # pd.Timestamp, no `date`: df_facturacion (leído con
+                    # pd.read_sql(parse_dates=...)) usa Timestamp en
+                    # fecha_desde/fecha_hasta -- mezclar date y Timestamp en la
+                    # misma columna rompe sort_values al concatenar ambos
+                    # DataFrames (TypeError: 'values' is not ordered).
+                    "fecha_desde": pd.Timestamp(fecha_efecto),
+                    "fecha_hasta": None,
+                    "prima_neta": prima_neta,
+                    "prima_total": r["prima_total"],
+                    "periodo_liquidacion": _periodo_liquidacion_ciclo_16_15(fecha_efecto),
+                    "duracion_recibo_meses": None,
+                    "nota_origen": None,
+                }
+            )
+
+    if not df_eiac_polizas.empty:
+        for _, p in df_eiac_polizas.iterrows():
+            numero_poliza = _extraer_y_registrar(p["id_poliza"], no_reconocidos)
+            if numero_poliza is None:
+                continue
+            if numero_poliza in polizas_csv_oficial:
+                continue  # el CSV oficial ya tiene esta póliza: nunca sobrescribir ni adelantarse
+            if numero_poliza in polizas_con_recibo:
+                continue  # ya hay recibo (real, aunque sea "PE"): el recibo gana siempre
+            prima_neta_poliza = p.get("prima_neta_poliza")
+            if prima_neta_poliza is None or pd.isna(prima_neta_poliza):
+                continue  # el XML de póliza no traía prima -- no se inventa
+            fecha_efecto = _a_fecha(p.get("fecha_efecto_inicial"))
+            if fecha_efecto is None:
+                continue
+
+            filas.append(
+                {
+                    "poliza": numero_poliza,
+                    "cliente_codigo": p.get("cliente_codigo"),
+                    "cartera": "EIAC_POLI",
+                    "producto_nombre": None,
+                    "fecha_desde": pd.Timestamp(fecha_efecto),
+                    "fecha_hasta": None,
+                    "prima_neta": float(prima_neta_poliza),
+                    "prima_total": None,
+                    "periodo_liquidacion": _periodo_liquidacion_ciclo_16_15(fecha_efecto),
+                    "duracion_recibo_meses": None,
+                    "nota_origen": NOTA_EIAC_POLI_PROVISIONAL,
+                }
+            )
+
     return pd.DataFrame(filas, columns=COLUMNAS_FACTURACION_EIAC), no_reconocidos
 
 
@@ -368,12 +431,18 @@ def construir_polizas_provisionales_desde_eiac(
         polizas_existentes = set(df_polizas_existente["poliza"])
 
     # pista_forma_pago por póliza: la primera pista no nula vista en sus recibos.
+    # De paso, qué pólizas YA tienen algún recibo EIAC -- para distinguir en
+    # la nota "producción confirmada por recibo" de "producción provisional
+    # por fecha de efecto, todavía sin recibo" (ver
+    # construir_facturacion_desde_eiac, mismo criterio de prioridad).
     pista_por_poliza: dict[str, str] = {}
+    polizas_con_recibo: set[str] = set()
     if not df_eiac_recibos.empty:
         for _, r in df_eiac_recibos.iterrows():
             numero_poliza = _extraer_y_registrar(r["id_poliza"], no_reconocidos)
             if numero_poliza is None:
                 continue
+            polizas_con_recibo.add(numero_poliza)
             pista = r.get("pista_forma_pago")
             if numero_poliza not in pista_por_poliza and isinstance(pista, str) and pista:
                 pista_por_poliza[numero_poliza] = pista
@@ -391,6 +460,25 @@ def construir_polizas_provisionales_desde_eiac(
 
         pista = pista_por_poliza.get(numero_poliza)
         forma_pago = _PISTA_A_FORMA_PAGO.get(pista)
+
+        # prima_neta_poliza (DatosImportes/Importes/PrimaNeta a nivel
+        # <Poliza>) es SIEMPRE la prima ANUALIZADA de la póliza completa,
+        # tenga el ciclo de facturación que tenga -- verificado con datos
+        # reales: pólizas Vida mensuales confirmadas (64110228/64110254/
+        # 64101698) tienen prima_neta_poliza = prima_neta mensual × 12
+        # exacto. Sin recibo (pista=None) no hay forma_pago real conocida,
+        # pero forzar "A" aquí es lo correcto para que
+        # engine.insights.resumen_produccion_periodo/engine.calibracion NO
+        # multipliquen por 12 una cifra que ya es anual (bug real: sin
+        # esto, producción de agosto se inflaba x12 -- 595,80€ pasaban a
+        # contar como 7.149,60€).
+        sin_recibo_con_prima = (
+            numero_poliza not in polizas_con_recibo
+            and p.get("prima_neta_poliza") is not None
+            and not pd.isna(p.get("prima_neta_poliza"))
+        )
+        if forma_pago is None and sin_recibo_con_prima:
+            forma_pago = "A"
 
         es_travel = _es_travel_por_ramo(p.get("ramo_entidad"))
         es_vida = _es_vida_por_ramo(p.get("ramo_entidad"), p.get("descripcion_ramo"))
@@ -435,8 +523,18 @@ def construir_polizas_provisionales_desde_eiac(
                 "ni CodigoEntidad confirman Salud para esta póliza, así que no se "
                 "asume ningún % de comisión sin revisar manualmente."
             )
-        if forma_pago:
+        if pista and forma_pago:
             nota += f" forma_pago provisional inferida de pista_forma_pago='{pista}'."
+
+        prima_neta_poliza = p.get("prima_neta_poliza")
+        if sin_recibo_con_prima:
+            nota += (
+                f" ⚠️ PRODUCCIÓN PROVISIONAL: {prima_neta_poliza:,.2f}€ (ya anualizada) "
+                "por fecha de efecto de la póliza (EIAC-ENV-POLI) — todavía sin recibo "
+                "EIAC que confirme el cobro. forma_pago='A' asumido para que se cuente "
+                "tal cual, sin duplicar x12 (ver docstring). En cuanto llegue el recibo "
+                "real, sustituye automáticamente a esta cifra."
+            )
 
         filas.append(
             {
@@ -445,14 +543,14 @@ def construir_polizas_provisionales_desde_eiac(
                 "razon_social": razon_social,
                 "producto_base": None,
                 "producto_codigo": None,
-                "fecha_emision": _a_fecha(p.get("fecha_emision")),
-                "fecha_efecto": _a_fecha(p.get("fecha_efecto_inicial")),
+                "fecha_emision": _a_timestamp(p.get("fecha_emision")),
+                "fecha_efecto": _a_timestamp(p.get("fecha_efecto_inicial")),
                 # Fecha real de anulación (DatosAnulacion/FechaAnulacion) si
                 # la hay -- necesaria para que el filtro de anulación de
                 # engine.calibracion pueda distinguir producción/comisión
                 # ANTERIOR a la anulación (cuenta) de la POSTERIOR (no
                 # cuenta), caso real: póliza 64171931.
-                "fecha_baja": _a_fecha(p.get("fecha_anulacion")),
+                "fecha_baja": _a_timestamp(p.get("fecha_anulacion")),
                 "forma_pago": forma_pago,
                 "situacion": situacion,
                 "provincia_tomador": None,
@@ -480,7 +578,7 @@ def integrar_eiac(
     ver docstring del módulo y de `construir_facturacion_desde_eiac`.
     """
     facturacion_eiac, no_reconocidos_recibos = construir_facturacion_desde_eiac(
-        df_eiac_recibos, df_facturacion_existente
+        df_eiac_polizas, df_eiac_recibos, df_facturacion_existente
     )
     polizas_provisionales, no_reconocidos_polizas = construir_polizas_provisionales_desde_eiac(
         df_eiac_polizas, df_eiac_recibos, df_polizas_existente

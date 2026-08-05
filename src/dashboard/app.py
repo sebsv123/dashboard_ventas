@@ -726,23 +726,29 @@ with tab_resumen:
 # =============================================================================
 with tab_polizas:
     st.subheader("Detalle de pólizas")
+    st.caption(
+        "Incluye provisionales de EIAC pendientes de confirmar con el CSV "
+        "oficial (columna Origen='EIAC') — mira Nota origen para ver si su "
+        "producción está confirmada por un recibo real o si es todavía "
+        "provisional por fecha de efecto (⚠️ PRODUCCIÓN PROVISIONAL)."
+    )
     col_f1, col_f2, col_f3 = st.columns(3)
     with col_f1:
         filtro_producto = st.multiselect(
-            "Producto", options=sorted(df_polizas["razon_social"].dropna().unique())
+            "Producto", options=sorted(df_polizas_con_eiac["razon_social"].dropna().unique())
         )
     with col_f2:
         filtro_provincia = st.multiselect(
-            "Provincia", options=sorted(df_polizas["provincia_tomador"].dropna().unique())
+            "Provincia", options=sorted(df_polizas_con_eiac["provincia_tomador"].dropna().unique())
         )
     with col_f3:
-        opciones_situacion = sorted(df_polizas["situacion"].dropna().unique())
+        opciones_situacion = sorted(df_polizas_con_eiac["situacion"].dropna().unique())
         default_situacion = ["A"] if "A" in opciones_situacion else []
         filtro_situacion = st.multiselect(
             "Situación", options=opciones_situacion, default=default_situacion
         )
 
-    df_mostrar = df_polizas.copy()
+    df_mostrar = df_polizas_con_eiac.copy()
     if filtro_producto:
         df_mostrar = df_mostrar[df_mostrar["razon_social"].isin(filtro_producto)]
     if filtro_provincia:
@@ -754,7 +760,7 @@ with tab_polizas:
         df_mostrar[
             [
                 "poliza", "razon_social", "forma_pago", "situacion", "fecha_emision",
-                "fecha_efecto", "provincia_tomador", "nombre_tomador",
+                "fecha_efecto", "provincia_tomador", "nombre_tomador", "origen", "nota_origen",
             ]
         ],
         width="stretch",

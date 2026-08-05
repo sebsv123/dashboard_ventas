@@ -149,7 +149,7 @@ COLUMNAS_POLIZAS = [
     "id_poliza", "cliente_codigo", "numero_poliza", "situacion_poliza",
     "clase_poliza", "fecha_efecto_inicial", "fecha_emision", "descripcion_riesgo",
     "descripcion_ramo", "codigo_entidad_interno", "ramo_entidad",
-    "fecha_anulacion", "motivo_anulacion",
+    "fecha_anulacion", "motivo_anulacion", "prima_neta_poliza",
 ]
 
 COLUMNAS_POLIZAS_RIESGOS = [
@@ -301,6 +301,17 @@ def parsear_eiac_polizas(path: str | Path) -> pd.DataFrame:
     `descripcion_riesgo` es solo el riesgo NumeroOrden=1 (el principal) —
     usa `parsear_eiac_polizas_riesgos` para el resto de asegurados de
     pólizas familiares.
+
+    `prima_neta_poliza`: la prima neta TOTAL de la póliza (suma de todas
+    sus coberturas), de `<Poliza><DatosImportes><Importes><PrimaNeta>` —
+    hermano directo de `<DatosRiesgos>`, NO la de `<Recibo>` (otro nodo
+    completamente distinto, ver módulo). Verificado con datos reales que
+    es exactamente la suma de las `PrimaNeta` de cada `<Cobertura>` dentro
+    de `<DatosRiesgos>` (caso real: póliza 64529498, 450,60+0,60+113,40+
+    26,40+4,80 = 595,80€, que es lo que trae este nodo). Si el fichero no
+    trae este nodo, queda `None` — nunca se inventa ni se suma a mano
+    desde las coberturas (mismo criterio de "no inventar" del resto del
+    parser).
     """
     tree = ET.parse(path)
     root = tree.getroot()
@@ -324,6 +335,7 @@ def parsear_eiac_polizas(path: str | Path) -> pd.DataFrame:
                 "ramo_entidad": _texto(poliza, "DatosPoliza/DatosRamo/RamoEntidad"),
                 "fecha_anulacion": _fecha(poliza, "DatosAnulacion/FechaAnulacion"),
                 "motivo_anulacion": _texto(poliza, "DatosAnulacion/MotivoAnulacion"),
+                "prima_neta_poliza": _decimal(poliza, "DatosImportes/Importes/PrimaNeta"),
             }
         )
 

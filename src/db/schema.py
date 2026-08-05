@@ -134,6 +134,13 @@ CREATE TABLE IF NOT EXISTS eiac_polizas (
     ramo_entidad TEXT,                -- p.ej. "RAVI" -- señal de Travel (caso real 64171931)
     fecha_anulacion TEXT,             -- solo si ClasePoliza=AN/SituacionPoliza=EX
     motivo_anulacion TEXT,
+    -- Prima neta TOTAL de la póliza (suma de todas las coberturas), leída de
+    -- <Poliza><DatosImportes><Importes><PrimaNeta> -- NO la de <Recibo>, que
+    -- es otra cosa (ver ingestion.eiac_xml). NULL si el XML de póliza no
+    -- traía ese nodo -- nunca se inventa. Permite generar producción
+    -- provisional por fecha de efecto ANTES de que llegue el recibo real
+    -- (ver engine.eiac_integracion.construir_facturacion_desde_eiac).
+    prima_neta_poliza REAL,
     fecha_import TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(id_poliza)
 );
@@ -235,4 +242,5 @@ def inicializar_schema(conn: sqlite3.Connection) -> None:
     _asegurar_columna(conn, "eiac_polizas", "ramo_entidad", "TEXT")
     _asegurar_columna(conn, "eiac_polizas", "fecha_anulacion", "TEXT")
     _asegurar_columna(conn, "eiac_polizas", "motivo_anulacion", "TEXT")
+    _asegurar_columna(conn, "eiac_polizas", "prima_neta_poliza", "REAL")
     conn.commit()
