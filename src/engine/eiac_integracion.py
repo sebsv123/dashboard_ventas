@@ -245,6 +245,39 @@ def _es_vida_por_ramo(ramo_entidad, descripcion_ramo) -> bool:
     return False
 
 
+def _clasificar_producto_por_ramo(
+    ramo_entidad, descripcion_ramo, codigo_entidad_interno
+) -> tuple[str | None, bool, str]:
+    """Clasifica Salud/Vida/Travel por las señales de ramo/entidad -- misma
+    lógica tanto si vienen de `<Poliza>` como de `<Recibo><DatosPoliza>`
+    (idéntica estructura, ver docstring del módulo). Devuelve
+    (razon_social, razon_social_asumida, fragmento_de_nota)."""
+    if _es_travel_por_ramo(ramo_entidad):
+        return RAZON_SOCIAL_TRAVEL, True, (
+            f"Producto detectado como {RAZON_SOCIAL_TRAVEL} por RamoEntidad='{ramo_entidad}' "
+            "— único producto de viaje en el contrato, señal inequívoca (no un default "
+            "estadístico como el de Salud)."
+        )
+    if _es_vida_por_ramo(ramo_entidad, descripcion_ramo):
+        return RAZON_SOCIAL_VIDA_POR_DEFECTO, True, (
+            "Producto exacto no confirmado, % asumido por defecto "
+            f"({RAZON_SOCIAL_VIDA_POR_DEFECTO}) — EIAC confirma Vida por "
+            f"RamoEntidad='{ramo_entidad}'/DescripcionRamo, pero no el producto concreto "
+            "(Tranquilidad/Tranquilidad Hipoteca/Accidentes Senior/etc.)."
+        )
+    if _es_salud_por_ramo(descripcion_ramo, codigo_entidad_interno):
+        return RAZON_SOCIAL_SALUD_POR_DEFECTO, True, (
+            "Producto exacto no confirmado, % asumido por defecto "
+            f"({RAZON_SOCIAL_SALUD_POR_DEFECTO}) — EIAC confirma Salud por "
+            "DescripcionRamo/CodigoEntidad, pero no el producto concreto (Particulares/"
+            "Red Sanitaria/etc.)."
+        )
+    return None, False, (
+        "razon_social desconocida — ni DescripcionRamo ni CodigoEntidad confirman Salud "
+        "para esta póliza, así que no se asume ningún % de comisión sin revisar manualmente."
+    )
+
+
 @dataclass
 class ResultadoIntegracionEiac:
     facturacion_eiac: pd.DataFrame
@@ -413,9 +446,21 @@ def construir_polizas_provisionales_desde_eiac(
     garantiza con su propio UPDATE... WHERE que esto nunca toque una fila
     ya oficial, así que aquí basta con distinguir por `origen` si la
     columna está disponible.
+
+    SEGUNDO BLOQUE (ago-2026, caso real 64572908): si un recibo EIAC llega
+    SIN que exista ningún `<Poliza>` correspondiente todavía (el caso
+    inverso del que ya cubre el primer bloque), la póliza es igualmente
+    invisible para producción/rappel -- el `INNER JOIN` con Pólizas
+    descarta la fila sin ningún dato con el que clasificarla. El propio
+    `<Recibo>` trae su bloque `<DatosPoliza>` con la MISMA estructura de
+    ramo/entidad/forma de pago que `<Poliza>` (confirmado con datos
+    reales), así que basta con reutilizar la misma clasificación por ramo.
+    `situacion` se asume "A" (activa) sin poder confirmarlo -- un recibo
+    COBRADO es la evidencia más fuerte posible de que la póliza existe y
+    está viva, pero se marca explícitamente como sin confirmar en la nota.
     """
     no_reconocidos: list[NumeroPolizaExtraido] = []
-    if df_eiac_polizas.empty:
+    if df_eiac_polizas.empty and df_eiac_recibos.empty:
         return pd.DataFrame(columns=COLUMNAS_POLIZAS_PROVISIONALES), no_reconocidos
 
     if df_polizas_existente.empty:
@@ -430,13 +475,17 @@ def construir_polizas_provisionales_desde_eiac(
         # el comportamiento conservador de antes de este cambio.
         polizas_existentes = set(df_polizas_existente["poliza"])
 
-    # pista_forma_pago por póliza: la primera pista no nula vista en sus recibos.
-    # De paso, qué pólizas YA tienen algún recibo EIAC -- para distinguir en
-    # la nota "producción confirmada por recibo" de "producción provisional
-    # por fecha de efecto, todavía sin recibo" (ver
-    # construir_facturacion_desde_eiac, mismo criterio de prioridad).
+    # pista_forma_pago y señales de ramo/entidad por póliza: la primera no
+    # nula vista en sus recibos. De paso, qué pólizas YA tienen algún
+    # recibo EIAC -- para distinguir en la nota "producción confirmada por
+    # recibo" de "producción provisional por fecha de efecto, todavía sin
+    # recibo" (ver construir_facturacion_desde_eiac, mismo criterio de
+    # prioridad) y para el segundo bloque (pólizas SOLO por recibo, sin
+    # ningún <Poliza> -- caso real 64572908).
     pista_por_poliza: dict[str, str] = {}
     polizas_con_recibo: set[str] = set()
+    ramo_recibo_por_poliza: dict[str, dict] = {}
+    primer_recibo_por_poliza: dict[str, pd.Series] = {}
     if not df_eiac_recibos.empty:
         for _, r in df_eiac_recibos.iterrows():
             numero_poliza = _extraer_y_registrar(r["id_poliza"], no_reconocidos)
@@ -446,12 +495,24 @@ def construir_polizas_provisionales_desde_eiac(
             pista = r.get("pista_forma_pago")
             if numero_poliza not in pista_por_poliza and isinstance(pista, str) and pista:
                 pista_por_poliza[numero_poliza] = pista
+            if numero_poliza not in ramo_recibo_por_poliza and any(
+                isinstance(r.get(campo), str) and r.get(campo)
+                for campo in ("ramo_entidad", "descripcion_ramo", "codigo_entidad_interno")
+            ):
+                ramo_recibo_por_poliza[numero_poliza] = {
+                    "ramo_entidad": r.get("ramo_entidad"),
+                    "descripcion_ramo": r.get("descripcion_ramo"),
+                    "codigo_entidad_interno": r.get("codigo_entidad_interno"),
+                }
+            primer_recibo_por_poliza.setdefault(numero_poliza, r)
 
     filas = []
+    polizas_con_eiac_poliza: set[str] = set()
     for _, p in df_eiac_polizas.iterrows():
         numero_poliza = _extraer_y_registrar(p["id_poliza"], no_reconocidos)
         if numero_poliza is None:
             continue
+        polizas_con_eiac_poliza.add(numero_poliza)
         if numero_poliza in polizas_existentes:
             continue  # ya confirmada por el CSV oficial: no crear provisional
 
@@ -480,49 +541,10 @@ def construir_polizas_provisionales_desde_eiac(
         if forma_pago is None and sin_recibo_con_prima:
             forma_pago = "A"
 
-        es_travel = _es_travel_por_ramo(p.get("ramo_entidad"))
-        es_vida = _es_vida_por_ramo(p.get("ramo_entidad"), p.get("descripcion_ramo"))
-        es_salud = _es_salud_por_ramo(p.get("descripcion_ramo"), p.get("codigo_entidad_interno"))
-        if es_travel:
-            razon_social = RAZON_SOCIAL_TRAVEL
-            razon_social_asumida = True
-            nota = (
-                f"Origen: EIAC (id_poliza={p['id_poliza']}), pendiente de confirmar "
-                f"con Pólizas oficial. Producto detectado como {RAZON_SOCIAL_TRAVEL} "
-                f"por RamoEntidad='{p.get('ramo_entidad')}' — único producto de viaje "
-                "en el contrato, señal inequívoca (no un default estadístico como el "
-                "de Salud)."
-            )
-        elif es_vida:
-            razon_social = RAZON_SOCIAL_VIDA_POR_DEFECTO
-            razon_social_asumida = True
-            nota = (
-                f"Origen: EIAC (id_poliza={p['id_poliza']}), pendiente de confirmar "
-                "con Pólizas oficial. Producto exacto no confirmado, % asumido por "
-                f"defecto ({RAZON_SOCIAL_VIDA_POR_DEFECTO}) — EIAC confirma Vida por "
-                f"RamoEntidad='{p.get('ramo_entidad')}'/DescripcionRamo, pero no el "
-                "producto concreto (Tranquilidad/Tranquilidad Hipoteca/Accidentes "
-                "Senior/etc.)."
-            )
-        elif es_salud:
-            razon_social = RAZON_SOCIAL_SALUD_POR_DEFECTO
-            razon_social_asumida = True
-            nota = (
-                f"Origen: EIAC (id_poliza={p['id_poliza']}), pendiente de confirmar "
-                "con Pólizas oficial. Producto exacto no confirmado, % asumido por "
-                f"defecto ({RAZON_SOCIAL_SALUD_POR_DEFECTO}) — EIAC confirma Salud "
-                "por DescripcionRamo/CodigoEntidad, pero no el producto concreto "
-                "(Particulares/Red Sanitaria/etc.)."
-            )
-        else:
-            razon_social = None
-            razon_social_asumida = False
-            nota = (
-                f"Origen: EIAC (id_poliza={p['id_poliza']}), pendiente de confirmar "
-                "con Pólizas oficial. razon_social desconocida — ni DescripcionRamo "
-                "ni CodigoEntidad confirman Salud para esta póliza, así que no se "
-                "asume ningún % de comisión sin revisar manualmente."
-            )
+        razon_social, razon_social_asumida, fragmento_nota = _clasificar_producto_por_ramo(
+            p.get("ramo_entidad"), p.get("descripcion_ramo"), p.get("codigo_entidad_interno")
+        )
+        nota = f"Origen: EIAC (id_poliza={p['id_poliza']}), pendiente de confirmar con Pólizas oficial. {fragmento_nota}"
         if pista and forma_pago:
             nota += f" forma_pago provisional inferida de pista_forma_pago='{pista}'."
 
@@ -561,6 +583,54 @@ def construir_polizas_provisionales_desde_eiac(
                 "razon_social_asumida": razon_social_asumida,
             }
         )
+
+    # SEGUNDO BLOQUE: pólizas que SOLO existen por recibo (sin ningún
+    # <Poliza> todavía) -- ver docstring de la función, caso real 64572908.
+    for numero_poliza, r in primer_recibo_por_poliza.items():
+        if numero_poliza in polizas_existentes:
+            continue  # ya confirmada por el CSV oficial
+        if numero_poliza in polizas_con_eiac_poliza:
+            continue  # ya generada arriba desde <Poliza> -- no duplicar
+
+        ramo = ramo_recibo_por_poliza.get(numero_poliza, {})
+        razon_social, razon_social_asumida, fragmento_nota = _clasificar_producto_por_ramo(
+            ramo.get("ramo_entidad"), ramo.get("descripcion_ramo"), ramo.get("codigo_entidad_interno")
+        )
+        pista = pista_por_poliza.get(numero_poliza)
+        forma_pago = _PISTA_A_FORMA_PAGO.get(pista)
+        fecha_efecto = _a_timestamp(r.get("fecha_efecto_inicial"))
+
+        nota = (
+            f"Origen: EIAC (id_poliza={r['id_poliza']}), pendiente de confirmar con "
+            f"Pólizas oficial. SIN ningún <Poliza> (EIAC-ENV-POLI) todavía — clasificada "
+            f"a partir del propio recibo (EIAC-ENV-RECI). {fragmento_nota} situacion='A' "
+            "asumida sin confirmar (un recibo cobrado es evidencia fuerte de póliza "
+            "activa, pero no un dato directo de situación de póliza)."
+        )
+        if pista and forma_pago:
+            nota += f" forma_pago provisional inferida de pista_forma_pago='{pista}'."
+
+        filas.append(
+            {
+                "poliza": numero_poliza,
+                "cliente_codigo": None,
+                "razon_social": razon_social,
+                "producto_base": None,
+                "producto_codigo": None,
+                "fecha_emision": None,
+                "fecha_efecto": fecha_efecto,
+                "fecha_baja": None,
+                "forma_pago": forma_pago,
+                "situacion": "A",
+                "provincia_tomador": None,
+                "delegacion": None,
+                "nombre_tomador": None,
+                "origen": "EIAC",
+                "nota_origen": nota,
+                "razon_social_asumida": razon_social_asumida,
+            }
+        )
+
     return pd.DataFrame(filas, columns=COLUMNAS_POLIZAS_PROVISIONALES), no_reconocidos
 
 

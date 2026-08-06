@@ -240,14 +240,18 @@ def cargar_eiac_recibos(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
             """
             INSERT INTO eiac_recibos
                 (id_poliza, prima_total, prima_neta, situacion_recibo,
-                 fecha_efecto_inicial, clase_forma_pago, pista_forma_pago)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                 fecha_efecto_inicial, clase_forma_pago, pista_forma_pago,
+                 ramo_entidad, descripcion_ramo, codigo_entidad_interno)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id_poliza, fecha_efecto_inicial) DO UPDATE SET
                 prima_total=excluded.prima_total,
                 prima_neta=excluded.prima_neta,
                 situacion_recibo=excluded.situacion_recibo,
                 clase_forma_pago=excluded.clase_forma_pago,
-                pista_forma_pago=excluded.pista_forma_pago
+                pista_forma_pago=excluded.pista_forma_pago,
+                ramo_entidad=excluded.ramo_entidad,
+                descripcion_ramo=excluded.descripcion_ramo,
+                codigo_entidad_interno=excluded.codigo_entidad_interno
             WHERE
                 (CASE situacion_recibo WHEN 'CO' THEN 1 WHEN 'PE' THEN 0 ELSE -1 END)
                 <= (CASE excluded.situacion_recibo WHEN 'CO' THEN 1 WHEN 'PE' THEN 0 ELSE -1 END)
@@ -255,7 +259,8 @@ def cargar_eiac_recibos(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
             (
                 r["id_poliza"], r["prima_total"], r["prima_neta"], r["situacion_recibo"],
                 _fecha_a_texto(r["fecha_efecto_inicial"]), r["clase_forma_pago"],
-                r["pista_forma_pago"],
+                r["pista_forma_pago"], r.get("ramo_entidad"), r.get("descripcion_ramo"),
+                r.get("codigo_entidad_interno"),
             ),
         )
         filas_actualizadas += cur.rowcount

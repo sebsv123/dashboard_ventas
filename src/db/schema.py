@@ -154,6 +154,14 @@ CREATE TABLE IF NOT EXISTS eiac_recibos (
     fecha_efecto_inicial TEXT,
     clase_forma_pago TEXT,
     pista_forma_pago TEXT,           -- heurística, no un hecho confirmado
+    -- Señales de ramo/entidad del propio recibo (<Recibo><DatosPoliza>...),
+    -- misma estructura y mismo uso que en eiac_polizas (_es_salud_por_ramo/
+    -- _es_vida_por_ramo/_es_travel_por_ramo) -- necesarias para clasificar
+    -- una póliza que solo existe por RECI, sin ningún POLI todavía (caso
+    -- real: póliza 64572908, ago-2026).
+    ramo_entidad TEXT,
+    descripcion_ramo TEXT,
+    codigo_entidad_interno TEXT,
     -- UNIQUE por (id_poliza, fecha_efecto_inicial), NO por prima_total: en
     -- los ficheros reales el importe fluctúa unos céntimos entre intentos
     -- del MISMO recibo (recálculos de recargos), así que no es parte de
@@ -243,4 +251,7 @@ def inicializar_schema(conn: sqlite3.Connection) -> None:
     _asegurar_columna(conn, "eiac_polizas", "fecha_anulacion", "TEXT")
     _asegurar_columna(conn, "eiac_polizas", "motivo_anulacion", "TEXT")
     _asegurar_columna(conn, "eiac_polizas", "prima_neta_poliza", "REAL")
+    _asegurar_columna(conn, "eiac_recibos", "ramo_entidad", "TEXT")
+    _asegurar_columna(conn, "eiac_recibos", "descripcion_ramo", "TEXT")
+    _asegurar_columna(conn, "eiac_recibos", "codigo_entidad_interno", "TEXT")
     conn.commit()

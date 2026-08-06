@@ -159,6 +159,7 @@ COLUMNAS_POLIZAS_RIESGOS = [
 COLUMNAS_RECIBOS = [
     "id_poliza", "prima_total", "prima_neta", "situacion_recibo",
     "fecha_efecto_inicial", "clase_forma_pago", "pista_forma_pago",
+    "ramo_entidad", "descripcion_ramo", "codigo_entidad_interno",
 ]
 
 
@@ -386,7 +387,17 @@ def _deduplicar_recibos(df: pd.DataFrame) -> pd.DataFrame:
 
 def parsear_eiac_recibos(path: str | Path) -> pd.DataFrame:
     """Parsea un fichero "EIAC-ENV-RECI-*.xml" a un DataFrame, una fila por
-    recibo YA deduplicado (ver `_deduplicar_recibos`)."""
+    recibo YA deduplicado (ver `_deduplicar_recibos`).
+
+    `ramo_entidad`/`descripcion_ramo`/`codigo_entidad_interno`: el propio
+    `<Recibo>` trae su bloque `<DatosPoliza>` con la MISMA estructura de
+    ramo/entidad que `<Poliza>` (confirmado con datos reales, póliza
+    64572908: `<DatosPoliza><CodigoEntidad><CodigoInterno>Asisa`,
+    `<DatosRamo><RamoEntidad>RASA`/`<DescripcionRamo>Asistencia
+    sanitaria`) — necesarios para poder clasificar (Salud/Vida/Travel) una
+    póliza que llega SOLO por recibo, sin ningún `<Poliza>` todavía (ver
+    `engine.eiac_integracion.construir_polizas_provisionales_desde_eiac`).
+    """
     tree = ET.parse(path)
     root = tree.getroot()
 
@@ -402,6 +413,9 @@ def parsear_eiac_recibos(path: str | Path) -> pd.DataFrame:
                 "fecha_efecto_inicial": _fecha(recibo, "DatosRecibo/Fechas/FechaEfectoInicial"),
                 "clase_forma_pago": clase_forma_pago,
                 "pista_forma_pago": _pista_forma_pago(clase_forma_pago),
+                "ramo_entidad": _texto(recibo, "DatosPoliza/DatosRamo/RamoEntidad"),
+                "descripcion_ramo": _texto(recibo, "DatosPoliza/DatosRamo/DescripcionRamo"),
+                "codigo_entidad_interno": _texto(recibo, "DatosPoliza/CodigoEntidad/CodigoInterno"),
             }
         )
 

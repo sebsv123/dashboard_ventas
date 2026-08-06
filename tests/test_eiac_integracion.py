@@ -418,6 +418,86 @@ def test_construir_polizas_provisionales_vacio_no_revienta():
     assert no_reconocidos == []
 
 
+# --- construir_polizas_provisionales_desde_eiac: solo recibo, sin <Poliza> -
+# Caso real (ago-2026): póliza 64572908, llega su EIAC-ENV-RECI (prima
+# 2.629,26€, RamoEntidad="RASA"/"Asistencia sanitaria"/"Asisa", ClaseFormaPago
+# "TA") pero SIN ningún EIAC-ENV-POLI todavía -- antes de este fix era
+# invisible para producción/rappel (el INNER JOIN con Pólizas la descartaba).
+
+
+def _df_eiac_recibo_64572908(**overrides) -> pd.DataFrame:
+    base = {
+        "id_poliza": "24848-64572908", "prima_total": 2634.97, "prima_neta": 2629.26,
+        "situacion_recibo": "CO", "fecha_efecto_inicial": date(2026, 8, 4),
+        "clase_forma_pago": "TA", "pista_forma_pago": "posible_prepago_anual",
+        "ramo_entidad": "RASA", "descripcion_ramo": "Asistencia sanitaria",
+        "codigo_entidad_interno": "Asisa",
+    }
+    base.update(overrides)
+    return pd.DataFrame([base])
+
+
+def test_construir_polizas_provisionales_genera_desde_recibo_sin_poliza():
+    df_recibos = _df_eiac_recibo_64572908()
+    provisionales, no_reconocidos = construir_polizas_provisionales_desde_eiac(
+        pd.DataFrame(), df_recibos, pd.DataFrame()
+    )
+    assert no_reconocidos == []
+    assert set(provisionales["poliza"]) == {"64572908"}
+    fila = provisionales.iloc[0]
+    assert fila["razon_social"] == RAZON_SOCIAL_SALUD_POR_DEFECTO
+    assert fila["razon_social_asumida"] == True  # noqa: E712 (puede llegar como np.bool_)
+    assert fila["forma_pago"] == "A"  # ClaseFormaPago=TA -> prepago anual
+    assert fila["situacion"] == "A"
+    assert fila["origen"] == "EIAC"
+    assert "SIN ningún <Poliza>" in fila["nota_origen"]
+    assert fila["fecha_efecto"] == pd.Timestamp(2026, 8, 4)
+
+
+def test_construir_polizas_provisionales_recibo_sin_poliza_no_duplica_si_csv_oficial_ya_la_tiene():
+    df_recibos = _df_eiac_recibo_64572908()
+    df_polizas_existente = pd.DataFrame([{"poliza": "64572908", "origen": "ASISA_CSV"}])
+    provisionales, _ = construir_polizas_provisionales_desde_eiac(
+        pd.DataFrame(), df_recibos, df_polizas_existente
+    )
+    assert provisionales.empty
+
+
+def test_construir_polizas_provisionales_recibo_sin_poliza_no_duplica_si_ya_hay_eiac_polizas():
+    # Si el <Poliza> SÍ llega (aunque sea en el mismo lote o antes), el
+    # primer bloque ya la genera -- el segundo bloque no debe duplicarla.
+    df_polizas_eiac = pd.DataFrame(
+        [
+            {
+                "id_poliza": "24848-64572908", "cliente_codigo": "24848", "numero_poliza": "64572908",
+                "situacion_poliza": "EV", "clase_poliza": "NP",
+                "fecha_efecto_inicial": date(2026, 8, 4), "fecha_emision": date(2026, 8, 4),
+                "descripcion_riesgo": "ALGUIEN", "descripcion_ramo": "Asistencia sanitaria",
+                "codigo_entidad_interno": "Asisa", "ramo_entidad": "RASA",
+                "fecha_anulacion": None, "motivo_anulacion": None, "prima_neta_poliza": 2629.26,
+            }
+        ]
+    )
+    df_recibos = _df_eiac_recibo_64572908()
+    provisionales, _ = construir_polizas_provisionales_desde_eiac(
+        df_polizas_eiac, df_recibos, pd.DataFrame()
+    )
+    assert len(provisionales) == 1  # no duplicada
+    assert "SIN ningún <Poliza>" not in provisionales.iloc[0]["nota_origen"]
+
+
+def test_produccion_agosto_de_poliza_solo_con_recibo_sin_poliza(contrato):
+    """Extremo a extremo: la producción del recibo sin <Poliza> debe contar
+    en Vista rápida/Rappel, no perderse en el INNER JOIN con Pólizas."""
+    df_recibos = _df_eiac_recibo_64572908()
+    resultado = integrar_eiac(pd.DataFrame(), df_recibos, pd.DataFrame(), pd.DataFrame())
+    resumen_agosto = resumen_produccion_periodo(
+        resultado.polizas_provisionales, resultado.facturacion_eiac, contrato, "2026-08"
+    )
+    assert resumen_agosto.polizas_detectadas == 1
+    assert resumen_agosto.produccion_salud == pytest.approx(2629.26, abs=0.01)
+
+
 # --- integrar_eiac (punto de entrada único) ---------------------------------
 
 def test_integrar_eiac_combina_no_reconocidos_de_ambas_fuentes():
