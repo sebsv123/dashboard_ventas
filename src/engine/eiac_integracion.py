@@ -134,6 +134,21 @@ from ingestion.eiac_xml import NumeroPolizaExtraido, extraer_numero_poliza_asisa
 # mes_M+1] pertenece al periodo mes_M+1. Ver docstring del módulo.
 _DIA_CORTE_CICLO = 16
 
+# ClaseFormaPago cuyo FechaEmision de recibo es fiable como fecha de
+# emisión real -- caso real ago-2026: comparando fecha_efecto_inicial vs
+# fecha_emision de los 79 recibos ya cargados, "TA" (tarjeta, pago único)
+# tiene un desfase de 0-8 días en los 39 casos (media 0,5 días; caso
+# confirmado 64659995: 7 días) -- coherente con una emisión real. "CC" y
+# "PC" (domiciliado/financiado, pago mensual) tienen desfases de 31 a 334
+# días, con varios casos EXACTOS de +120, +150, +181, +304 y +334 días
+# conservando el mismo día del mes en pólizas sin relación entre sí
+# (63930658, 63933124, 64201679, 64226440, 64261922) -- firma de una
+# fecha de vencimiento/próxima cuota programada, no de la emisión real de
+# ESTE recibo. Allowlist (no denylist) a propósito: ante un ClaseFormaPago
+# nuevo nunca visto, mejor no confiar en su FechaEmision hasta
+# confirmarlo, que confiar por defecto y arriesgar otro caso como este.
+_CLASES_FORMA_PAGO_FECHA_EMISION_FIABLE = {"TA"}
+
 # ClaseFormaPago -> forma_pago provisional. PISTA, no un hecho confirmado
 # (ver `ingestion.eiac_xml._pista_forma_pago`) — se usa solo como valor de
 # arranque hasta que llegue el CSV oficial de Pólizas.
@@ -322,27 +337,37 @@ def _periodo_liquidacion_ciclo_16_15(fecha) -> str:
     return mes_calendario
 
 
-def _periodo_liquidacion_recibo(fecha_efecto, fecha_emision) -> str:
+def _periodo_liquidacion_recibo(fecha_efecto, fecha_emision, clase_forma_pago) -> str:
     """Regla de negocio confirmada por Sebastián (caso real 24848-64659995,
-    FechaEfectoInicial=2026-08-12 / FechaEmision=2026-08-19): para que un
-    recibo cuente en el periodo X hacen falta DOS condiciones simultáneas,
-    fecha_efecto Y fecha_emision dentro del mismo ciclo 16→15 de X. Si la
-    emisión cae en un ciclo posterior al de la fecha de efecto (recibo
-    generado después del corte del 15), el recibo entra en ese periodo
-    posterior aunque la fecha de efecto sea anterior -- nunca al revés
-    (una emisión más temprana no adelanta un efecto tardío, ese caso ya lo
-    cubre `_periodo_liquidacion_ciclo_16_15` con la fecha de efecto sola).
-    Por eso el periodo final es el MÁXIMO (más tardío) entre ambos --
-    comparación de string funciona porque el formato "YYYY-MM" ordena
-    igual que la fecha real.
+    FechaEfectoInicial=2026-08-12 / FechaEmision=2026-08-19, ClaseFormaPago
+    "TA"): para que un recibo cuente en el periodo X hacen falta DOS
+    condiciones simultáneas, fecha_efecto Y fecha_emision dentro del mismo
+    ciclo 16→15 de X. Si la emisión cae en un ciclo posterior al de la
+    fecha de efecto (recibo generado después del corte del 15), el recibo
+    entra en ese periodo posterior aunque la fecha de efecto sea anterior
+    -- nunca al revés (una emisión más temprana no adelanta un efecto
+    tardío, ese caso ya lo cubre `_periodo_liquidacion_ciclo_16_15` con la
+    fecha de efecto sola). Por eso el periodo final es el MÁXIMO (más
+    tardío) entre ambos -- comparación de string funciona porque el
+    formato "YYYY-MM" ordena igual que la fecha real.
 
-    `fecha_emision` es `None` para cualquier recibo cargado antes de esta
-    regla (columna nueva, sin backfill todavía -- ver
-    `engine.eiac_integracion` y la conversación que añadió esta función):
-    en ese caso se usa solo `fecha_efecto`, exactamente el comportamiento
-    de antes de esta regla."""
+    SOLO se aplica la segunda condición si `clase_forma_pago` está en
+    `_CLASES_FORMA_PAGO_FECHA_EMISION_FIABLE` -- ver ese comentario para
+    el caso real (ago-2026) que descubrió que "CC"/"PC" (domiciliado/
+    financiado) traen un `FechaEmision` de recibo que en realidad es una
+    fecha de vencimiento de cuota futura (+120 a +334 días, mismo día del
+    mes), no la emisión real de ESTE recibo -- 4 pólizas (63930658,
+    63933124, 64226440, 64261922) generaron periodos 2027-01/2027-05
+    falsos antes de esta salvaguarda. Para cualquier forma de pago no
+    fiable (o `fecha_emision` ausente, columna nueva sin backfill), se usa
+    solo `fecha_efecto` -- exactamente el comportamiento de antes de la
+    regla de las dos condiciones."""
     periodo = _periodo_liquidacion_ciclo_16_15(fecha_efecto)
-    if fecha_emision is not None:
+    fecha_emision_fiable = (
+        fecha_emision is not None
+        and clase_forma_pago in _CLASES_FORMA_PAGO_FECHA_EMISION_FIABLE
+    )
+    if fecha_emision_fiable:
         periodo_emision = _periodo_liquidacion_ciclo_16_15(fecha_emision)
         if periodo_emision > periodo:
             periodo = periodo_emision
@@ -419,7 +444,9 @@ def construir_facturacion_desde_eiac(
                     "fecha_hasta": None,
                     "prima_neta": prima_neta,
                     "prima_total": r["prima_total"],
-                    "periodo_liquidacion": _periodo_liquidacion_recibo(fecha_efecto, fecha_emision),
+                    "periodo_liquidacion": _periodo_liquidacion_recibo(
+                        fecha_efecto, fecha_emision, r.get("clase_forma_pago")
+                    ),
                     "duracion_recibo_meses": None,
                     "nota_origen": None,
                 }
