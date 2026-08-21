@@ -40,6 +40,11 @@ cada campo DENTRO de `<Poliza>`/`<Recibo>`:
       <SituacionRecibo>
       <Fechas>
         <FechaEfectoInicial>
+        <FechaEmision>          (confirmada real, caso 24848-64659995:
+                                  FechaEfectoInicial=2026-08-12,
+                                  FechaEmision=2026-08-19 -- ver
+                                  engine.eiac_integracion, segunda condición
+                                  del periodo_liquidacion)
       <GestionCobro>
         <DatosFormaPago>
           <ClaseFormaPago>
@@ -158,7 +163,7 @@ COLUMNAS_POLIZAS_RIESGOS = [
 
 COLUMNAS_RECIBOS = [
     "id_poliza", "prima_total", "prima_neta", "situacion_recibo",
-    "fecha_efecto_inicial", "clase_forma_pago", "pista_forma_pago",
+    "fecha_efecto_inicial", "fecha_emision", "clase_forma_pago", "pista_forma_pago",
     "ramo_entidad", "descripcion_ramo", "codigo_entidad_interno",
 ]
 
@@ -411,6 +416,7 @@ def parsear_eiac_recibos(path: str | Path) -> pd.DataFrame:
                 "prima_neta": _decimal(recibo, "DatosRecibo/DatosImportes/Importes/PrimaNeta"),
                 "situacion_recibo": _texto(recibo, "DatosRecibo/SituacionRecibo"),
                 "fecha_efecto_inicial": _fecha(recibo, "DatosRecibo/Fechas/FechaEfectoInicial"),
+                "fecha_emision": _fecha(recibo, "DatosRecibo/Fechas/FechaEmision"),
                 "clase_forma_pago": clase_forma_pago,
                 "pista_forma_pago": _pista_forma_pago(clase_forma_pago),
                 "ramo_entidad": _texto(recibo, "DatosPoliza/DatosRamo/RamoEntidad"),

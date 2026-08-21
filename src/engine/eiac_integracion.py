@@ -314,12 +314,39 @@ def _extraer_y_registrar(id_poliza_eiac: str, no_reconocidos: list[NumeroPolizaE
 
 def _periodo_liquidacion_ciclo_16_15(fecha) -> str:
     """Reconstruye el periodo_liquidacion real de ASISA (ciclo 16→15) a
-    partir de una fecha de efecto — ver docstring del módulo para la
-    justificación y el caso real que la confirma."""
+    partir de una fecha — ver docstring del módulo para la justificación y
+    el caso real que la confirma."""
     mes_calendario = f"{fecha.year:04d}-{fecha.month:02d}"
     if fecha.day >= _DIA_CORTE_CICLO:
         return siguiente_periodo(mes_calendario)
     return mes_calendario
+
+
+def _periodo_liquidacion_recibo(fecha_efecto, fecha_emision) -> str:
+    """Regla de negocio confirmada por Sebastián (caso real 24848-64659995,
+    FechaEfectoInicial=2026-08-12 / FechaEmision=2026-08-19): para que un
+    recibo cuente en el periodo X hacen falta DOS condiciones simultáneas,
+    fecha_efecto Y fecha_emision dentro del mismo ciclo 16→15 de X. Si la
+    emisión cae en un ciclo posterior al de la fecha de efecto (recibo
+    generado después del corte del 15), el recibo entra en ese periodo
+    posterior aunque la fecha de efecto sea anterior -- nunca al revés
+    (una emisión más temprana no adelanta un efecto tardío, ese caso ya lo
+    cubre `_periodo_liquidacion_ciclo_16_15` con la fecha de efecto sola).
+    Por eso el periodo final es el MÁXIMO (más tardío) entre ambos --
+    comparación de string funciona porque el formato "YYYY-MM" ordena
+    igual que la fecha real.
+
+    `fecha_emision` es `None` para cualquier recibo cargado antes de esta
+    regla (columna nueva, sin backfill todavía -- ver
+    `engine.eiac_integracion` y la conversación que añadió esta función):
+    en ese caso se usa solo `fecha_efecto`, exactamente el comportamiento
+    de antes de esta regla."""
+    periodo = _periodo_liquidacion_ciclo_16_15(fecha_efecto)
+    if fecha_emision is not None:
+        periodo_emision = _periodo_liquidacion_ciclo_16_15(fecha_emision)
+        if periodo_emision > periodo:
+            periodo = periodo_emision
+    return periodo
 
 
 def construir_facturacion_desde_eiac(
@@ -374,6 +401,7 @@ def construir_facturacion_desde_eiac(
             fecha_efecto = _a_fecha(r["fecha_efecto_inicial"])
             if fecha_efecto is None:
                 continue
+            fecha_emision = _a_fecha(r.get("fecha_emision"))
 
             prima_neta = r["prima_neta"] if pd.notna(r["prima_neta"]) else r["prima_total"]
             filas.append(
@@ -391,7 +419,7 @@ def construir_facturacion_desde_eiac(
                     "fecha_hasta": None,
                     "prima_neta": prima_neta,
                     "prima_total": r["prima_total"],
-                    "periodo_liquidacion": _periodo_liquidacion_ciclo_16_15(fecha_efecto),
+                    "periodo_liquidacion": _periodo_liquidacion_recibo(fecha_efecto, fecha_emision),
                     "duracion_recibo_meses": None,
                     "nota_origen": None,
                 }

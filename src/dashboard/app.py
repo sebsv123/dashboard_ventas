@@ -126,7 +126,9 @@ def cargar_datos():
     eiac_polizas = pd.read_sql(
         "SELECT * FROM eiac_polizas", conn, parse_dates=["fecha_efecto_inicial", "fecha_emision"]
     )
-    eiac_recibos = pd.read_sql("SELECT * FROM eiac_recibos", conn, parse_dates=["fecha_efecto_inicial"])
+    eiac_recibos = pd.read_sql(
+        "SELECT * FROM eiac_recibos", conn, parse_dates=["fecha_efecto_inicial", "fecha_emision"]
+    )
     return polizas, facturacion, liquidacion, factura_pdf, eiac_polizas, eiac_recibos
 
 
@@ -474,7 +476,8 @@ with st.sidebar:
                     parse_dates=["fecha_efecto_inicial", "fecha_emision"],
                 )
                 df_eiac_recibos_bd = pd.read_sql(
-                    "SELECT * FROM eiac_recibos", conn, parse_dates=["fecha_efecto_inicial"]
+                    "SELECT * FROM eiac_recibos", conn,
+                    parse_dates=["fecha_efecto_inicial", "fecha_emision"],
                 )
                 resultado_integracion = integrar_eiac(
                     df_eiac_polizas_bd, df_eiac_recibos_bd, df_polizas_bd, df_facturacion_bd

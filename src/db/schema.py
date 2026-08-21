@@ -152,6 +152,9 @@ CREATE TABLE IF NOT EXISTS eiac_recibos (
     prima_neta REAL,
     situacion_recibo TEXT,           -- ya deduplicado por ingestion.eiac_xml (CO > PE)
     fecha_efecto_inicial TEXT,
+    fecha_emision TEXT,               -- DatosRecibo/Fechas/FechaEmision -- segunda
+                                       -- condición del periodo_liquidacion, ver
+                                       -- engine.eiac_integracion._periodo_liquidacion_ciclo_16_15
     clase_forma_pago TEXT,
     pista_forma_pago TEXT,           -- heurística, no un hecho confirmado
     -- Señales de ramo/entidad del propio recibo (<Recibo><DatosPoliza>...),
@@ -254,4 +257,5 @@ def inicializar_schema(conn: sqlite3.Connection) -> None:
     _asegurar_columna(conn, "eiac_recibos", "ramo_entidad", "TEXT")
     _asegurar_columna(conn, "eiac_recibos", "descripcion_ramo", "TEXT")
     _asegurar_columna(conn, "eiac_recibos", "codigo_entidad_interno", "TEXT")
+    _asegurar_columna(conn, "eiac_recibos", "fecha_emision", "TEXT")
     conn.commit()
