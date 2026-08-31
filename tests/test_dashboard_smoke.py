@@ -471,7 +471,7 @@ def test_vista_rapida_muestra_comision_bruta_bruto_y_neto(tmp_path, monkeypatch)
     comision_salud = _valor_a_float(metricas["Comisión Salud estimada"])
     comision_vida = _valor_a_float(metricas["Comisión Vida estimada"])
     rappel = _valor_a_float(metricas["Rappel estimado"])
-    total_bruto = _valor_a_float(metricas["Total bruto (comisión + rappel)"])
+    total_bruto = _valor_a_float(metricas["Total bruto (comisión estimada + rappel estimado)"])
     total_neto = _valor_a_float(metricas["💰 Total NETO estimado"])
 
     # ASISA PARTICULARES, primer año: 25% de producción (config/contrato.yaml).

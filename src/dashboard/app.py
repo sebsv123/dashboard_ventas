@@ -32,10 +32,11 @@ from db.carga import (
 from db.schema import conectar, inicializar_schema
 from engine.calibracion import (
     calcular_calibracion,
+    comision_bruta_real_periodo,
     corregir_periodo_liquidacion_vida_mensual,
     estimar_comision_y_rappel_periodo,
 )
-from engine.comisiones import estimar_comision_poliza, resumen_historial_ajustes_cartera
+from engine.comisiones import aplicar_retencion, estimar_comision_poliza, resumen_historial_ajustes_cartera
 from engine.config_contrato import cargar_contrato
 from engine.eiac_integracion import integrar_eiac
 from engine.fiscal import anios_disponibles, calcular_retenciones_anio
@@ -288,32 +289,74 @@ def _mostrar_bloque_produccion_periodo(periodo: str, etiqueta: str) -> None:
     _estimacion = estimar_comision_y_rappel_periodo(
         _fusion_periodo, contrato, periodo, _fusion_recibos_periodo, df_liquidacion
     )
+    # "CSV oficial siempre gana sobre EIAC" tiene aquí su equivalente: si
+    # Liquidación real YA tiene movimientos de este periodo, esa comisión
+    # gana sobre lo que el motor hubiera estimado -- ver docstring de
+    # comision_bruta_real_periodo (caso real: Comisión Salud estimada de
+    # agosto sobreestimaba +109,11€ por ignorar un extorno y una
+    # reanualización posteriores a la primera alta de sus pólizas).
+    _real = comision_bruta_real_periodo(df_liquidacion, contrato, periodo)
+    if _real is not None:
+        comision_salud_mostrada = _real.comision_salud
+        comision_vida_mostrada = _real.comision_vida
+        # El rappel no viene desglosado por póliza en Liquidación -- se
+        # sigue combinando la comisión YA REAL con el rappel estimado.
+        total_bruto_mostrado = round(_real.comision_bruta + _estimacion.rappel.importe, 2)
+        total_neto_mostrado = aplicar_retencion(total_bruto_mostrado, contrato)
+        etiqueta = "real"
+    else:
+        comision_salud_mostrada = _estimacion.comision_salud
+        comision_vida_mostrada = _estimacion.comision_vida
+        total_bruto_mostrado = _estimacion.total_bruto
+        total_neto_mostrado = _estimacion.total_neto
+        etiqueta = "estimada"
 
     cm1, cm2, cm3 = st.columns(3)
     cm1.metric("Producción nueva Salud", f"{_estimacion.produccion_salud:,.2f} €")
     cm2.metric("Producción nueva Vida", f"{_estimacion.produccion_vida:,.2f} €")
     cm3.metric("Producción computada para rappel", f"{_estimacion.rappel.produccion_mes:,.2f} €", help=_estimacion.rappel.nota)
     cm4, cm5, cm6 = st.columns(3)
-    cm4.metric("Comisión Salud estimada", f"{_estimacion.comision_salud:,.2f} €")
+    cm4.metric(
+        f"Comisión Salud {etiqueta}", f"{comision_salud_mostrada:,.2f} €",
+        help=(f"Confirmada con Liquidación real ({_real.num_movimientos} movimientos cargados)." if _real is not None else None),
+    )
     cm5.metric(
-        "Comisión Vida estimada", f"{_estimacion.comision_vida:,.2f} €",
-        help="Incluye todos los recibos de Vida del periodo, también los recurrentes de pólizas vendidas en meses anteriores.",
+        f"Comisión Vida {etiqueta}", f"{comision_vida_mostrada:,.2f} €",
+        help=(
+            f"Confirmada con Liquidación real ({_real.num_movimientos} movimientos cargados)."
+            if _real is not None else
+            "Incluye todos los recibos de Vida del periodo, también los recurrentes de pólizas vendidas en meses anteriores."
+        ),
     )
     cm6.metric(
         "Rappel estimado",
         f"{_estimacion.rappel.importe:,.2f} €",
         help=_estimacion.rappel.nota,
     )
-    st.metric("Total bruto (comisión + rappel)", f"{_estimacion.total_bruto:,.2f} €")
+    if _real is not None:
+        st.success(
+            f"✅ Comisión bruta confirmada con la Liquidación real de {periodo} "
+            f"({_real.num_movimientos} movimientos ya cargados) — ya no es una "
+            "estimación del motor. El rappel y los totales de abajo siguen "
+            "siendo estimados: Liquidación no desglosa el rappel por póliza."
+        )
+    etiqueta_masc = "real" if _real is not None else "estimado"
+    st.metric(f"Total bruto (comisión {etiqueta} + rappel estimado)", f"{total_bruto_mostrado:,.2f} €")
 
     st.metric(
-        "💰 Total NETO estimado",
-        f"{_estimacion.total_neto:,.2f} €",
+        f"💰 Total NETO {etiqueta_masc}",
+        f"{total_neto_mostrado:,.2f} €",
         help=(
             f"Total bruto tras aplicar la retención de IRPF del "
             f"{contrato.retencion_irpf:.0%} (config/contrato.yaml, "
-            "aplicar_retencion()). Estimación del motor — confirmar "
-            "siempre contra la Liquidación/Factura real."
+            "aplicar_retencion())."
+            + (
+                " Comisión confirmada con Liquidación real; el rappel sigue "
+                "siendo una estimación del motor."
+                if _real is not None else
+                " Estimación del motor — confirmar siempre contra la "
+                "Liquidación/Factura real."
+            )
         ),
     )
     _aviso_comision_sin_razon_social(_fusion_periodo)
@@ -330,10 +373,19 @@ def _mostrar_aviso_historial_irregular(periodo: str) -> None:
     )
     if not irregulares:
         return
+    # Importe y tipo del ÚLTIMO ajuste conocido de cada póliza, en línea en
+    # el propio aviso -- antes solo estaba en el expander de detalle, y
+    # había que abrirlo y buscar la fila para verlo (caso real: 63999762,
+    # último extorno -256,73€ en agosto 2026).
+    detalle_inline = "; ".join(
+        f"{p.poliza}: último {'extorno' if 'EXTORNO' in (p.ultimo_accion or '').upper() else 'ajuste'} "
+        f"{p.ultimo_importe:+,.2f} € en {p.ultimo_periodo}"
+        for p in irregulares
+    )
     st.warning(
         f"⚠️ {len(irregulares)} de tus pólizas de salud mensual de este mes "
-        "tienen historial de ajustes irregulares (ver detalle) — la "
-        "estimación total puede desviarse más de lo habitual por esto."
+        "tienen historial de ajustes irregulares — la estimación total puede "
+        f"desviarse más de lo habitual por esto. {detalle_inline}."
     )
     with st.expander("Ver pólizas a vigilar"):
         st.dataframe(
@@ -801,27 +853,68 @@ with tab_rappel:
     produccion_salud = estimacion_mes.produccion_salud
     produccion_vida = estimacion_mes.produccion_vida
 
+    # Liquidación real gana sobre el estimado cuando ya existe para este
+    # periodo -- mismo criterio y misma función que Vista rápida (ver
+    # _mostrar_bloque_produccion_periodo / comision_bruta_real_periodo),
+    # para que ambas pestañas nunca muestren cifras distintas del mismo mes.
+    real_mes = comision_bruta_real_periodo(df_liquidacion, contrato, mes_texto)
+    if real_mes is not None:
+        comision_salud_mostrada = real_mes.comision_salud
+        comision_vida_mostrada = real_mes.comision_vida
+        total_bruto_mostrado = round(real_mes.comision_bruta + resultado_rappel.importe, 2)
+        total_neto_mostrado = aplicar_retencion(total_bruto_mostrado, contrato)
+        etiqueta_mes = "real"
+    else:
+        comision_salud_mostrada = estimacion_mes.comision_salud
+        comision_vida_mostrada = estimacion_mes.comision_vida
+        total_bruto_mostrado = estimacion_mes.total_bruto
+        total_neto_mostrado = estimacion_mes.total_neto
+        etiqueta_mes = "estimada"
+
     c1, c2, c3 = st.columns(3)
     c1.metric("Producción nueva Salud", f"{estimacion_mes.produccion_salud:,.2f} €")
     c2.metric("Producción nueva Vida", f"{estimacion_mes.produccion_vida:,.2f} €")
     c3.metric("Producción computada para rappel", f"{resultado_rappel.produccion_mes:,.2f} €", help=resultado_rappel.nota)
     c4, c5, c6 = st.columns(3)
-    c4.metric("Comisión Salud estimada", f"{estimacion_mes.comision_salud:,.2f} €")
-    c5.metric("Comisión Vida estimada", f"{estimacion_mes.comision_vida:,.2f} €", help="Incluye todos los recibos de Vida del periodo, también los recurrentes de pólizas vendidas en meses anteriores.")
+    c4.metric(
+        f"Comisión Salud {etiqueta_mes}", f"{comision_salud_mostrada:,.2f} €",
+        help=(f"Confirmada con Liquidación real ({real_mes.num_movimientos} movimientos cargados)." if real_mes is not None else None),
+    )
+    c5.metric(
+        f"Comisión Vida {etiqueta_mes}", f"{comision_vida_mostrada:,.2f} €",
+        help=(
+            f"Confirmada con Liquidación real ({real_mes.num_movimientos} movimientos cargados)."
+            if real_mes is not None else
+            "Incluye todos los recibos de Vida del periodo, también los recurrentes de pólizas vendidas en meses anteriores."
+        ),
+    )
     c6.metric(
         "Rappel estimado",
         f"{resultado_rappel.importe:,.2f} €",
         help=resultado_rappel.nota,
     )
+    if real_mes is not None:
+        st.success(
+            f"✅ Comisión bruta confirmada con la Liquidación real de {mes_texto} "
+            f"({real_mes.num_movimientos} movimientos ya cargados) — ya no es una "
+            "estimación del motor. El rappel y los totales de abajo siguen "
+            "siendo estimados: Liquidación no desglosa el rappel por póliza."
+        )
 
+    etiqueta_mes_masc = "real" if real_mes is not None else "estimado"
     c7, c8 = st.columns(2)
-    c7.metric("Total bruto (comisión + rappel)", f"{estimacion_mes.total_bruto:,.2f} €")
+    c7.metric(f"Total bruto (comisión {etiqueta_mes} + rappel estimado)", f"{total_bruto_mostrado:,.2f} €")
     c8.metric(
-        "💰 Total NETO estimado",
-        f"{estimacion_mes.total_neto:,.2f} €",
+        f"💰 Total NETO {etiqueta_mes_masc}",
+        f"{total_neto_mostrado:,.2f} €",
         help=(
             f"Total bruto tras aplicar la retención de IRPF del "
             f"{contrato.retencion_irpf:.0%} (config/contrato.yaml)."
+            + (
+                " Comisión confirmada con Liquidación real; el rappel sigue "
+                "siendo una estimación del motor."
+                if real_mes is not None else ""
+            )
         ),
     )
 

@@ -6,6 +6,7 @@ import pytest
 
 from engine.calibracion import (
     calcular_calibracion,
+    comision_bruta_real_periodo,
     corregir_periodo_liquidacion_vida_mensual,
     estimar_comision_y_rappel_periodo,
 )
@@ -600,6 +601,25 @@ def test_corrige_periodo_liquidacion_de_ventana_vida_mensual_mal_etiquetada(cont
     assert ventana_254.iloc[0]["periodo_liquidacion"] == "2026-07"
 
 
+def test_no_corrige_ventana_vida_mensual_lejos_del_corte(contrato):
+    # Caso real (ago-2026): póliza 64358396 (ASISA VIDA TRANQUILIDAD),
+    # fecha_desde=2026-08-05 (día 5, lejos del corte) etiquetada
+    # periodo_liquidacion="2026-08" en Facturación oficial -- la Liquidación
+    # real de agosto confirmó ese MISMO periodo (comisión 22,96€, "08-2026"),
+    # sin ningún desfase. Antes de este fix, la función desplazaba esta
+    # ventana a "2026-09" igual que las de día 15, dejando la póliza fuera
+    # de "Comisión Vida estimada" del mes en que realmente se liquidó.
+    df_facturacion = pd.DataFrame(
+        [
+            {"poliza": "64358396", "fecha_desde": date(2026, 8, 5), "fecha_hasta": date(2026, 9, 5),
+             "periodo_liquidacion": "2026-08", "duracion_recibo_meses": 1.0, "prima_neta": 38.26},
+        ]
+    )
+    df_polizas = pd.DataFrame([{"poliza": "64358396", "razon_social": "ASISA VIDA TRANQUILIDAD"}])
+    corregido = corregir_periodo_liquidacion_vida_mensual(df_facturacion, df_polizas, contrato)
+    assert corregido.iloc[0]["periodo_liquidacion"] == "2026-08"
+
+
 def test_no_corrige_vida_con_ciclo_anual_aunque_este_mal_etiquetada(contrato):
     # Caso real: póliza 64131545 (AV ACCIDENTES SENIOR), Vida con prepago
     # anual (duracion_recibo_meses=12) -- ahí el literal SÍ coincide con la
@@ -628,3 +648,100 @@ def test_no_corrige_salud_mensual_aunque_el_ciclo_no_coincida(contrato):
     df_polizas = pd.DataFrame([{"poliza": "SALUD-1", "razon_social": "ASISA PARTICULARES"}])
     corregido = corregir_periodo_liquidacion_vida_mensual(df_facturacion, df_polizas, contrato)
     assert corregido.iloc[0]["periodo_liquidacion"] == "2026-06"
+
+
+# --- comision_bruta_real_periodo ---------------------------------------------
+
+
+def test_comision_bruta_real_periodo_sin_liquidacion_da_none(contrato):
+    assert comision_bruta_real_periodo(pd.DataFrame(), contrato, "2026-08") is None
+
+
+def test_comision_bruta_real_periodo_sin_movimientos_del_periodo_da_none(contrato):
+    df_liquidacion = pd.DataFrame(
+        [{"poliza": "X", "razon_social": "ASISA PARTICULARES", "comision": 100.0, "periodo_liquidacion": "07-2026"}]
+    )
+    assert comision_bruta_real_periodo(df_liquidacion, contrato, "2026-08") is None
+
+
+def test_comision_bruta_real_periodo_suma_salud_y_vida_por_separado(contrato):
+    # Caso real (ago-2026, Liquidacion_..._08_2026.csv): 63999762 tuvo un
+    # EXTORNO ANUALIZADA de -256,73€ que el estimador del motor nunca ve
+    # (ver docstring de comision_bruta_real_periodo, y el diagnóstico que
+    # motivó esta función: "Comisión Salud estimada" de agosto sobreestimaba
+    # +109,11€ por esto). Con Liquidación real cargada debe contar entera,
+    # negativa incluida, y Liquidación usa "MM-AAAA" (al revés que
+    # Facturación) -- se normaliza igual que en el resto del proyecto.
+    df_liquidacion = pd.DataFrame(
+        [
+            {"poliza": "63999762", "razon_social": "ASISA PARTICULARES", "comision": -256.73, "periodo_liquidacion": "08-2026"},
+            {"poliza": "64171805", "razon_social": "ASISA PARTICULARES", "comision": 152.10, "periodo_liquidacion": "08-2026"},
+            {"poliza": "64358396", "razon_social": "ASISA VIDA TRANQUILIDAD", "comision": 22.96, "periodo_liquidacion": "08-2026"},
+            {"poliza": "63948186", "razon_social": "ASISA VIDA TRANQUILIDAD", "comision": 23.27, "periodo_liquidacion": "08-2026"},
+            {"poliza": "OTRO", "razon_social": "ASISA PARTICULARES", "comision": 999.0, "periodo_liquidacion": "07-2026"},
+        ]
+    )
+    resultado = comision_bruta_real_periodo(df_liquidacion, contrato, "2026-08")
+    assert resultado.comision_salud == pytest.approx(-104.63)
+    assert resultado.comision_vida == pytest.approx(46.23)
+    assert resultado.comision_bruta == pytest.approx(-58.40)
+    assert resultado.num_movimientos == 4
+
+
+# --- guard de día 15: nunca doble desplazamiento ------------------------------
+# Verificación pedida tras el fix del guard de día -- ver diagnóstico: ¿puede
+# corregir_periodo_liquidacion_vida_mensual desplazar DOS VECES el periodo de
+# una póliza EIAC de Vida mensual con fecha_desde.day >= 16, si esa fila ya
+# llegó con el periodo desplazado +1 mes por
+# engine.eiac_integracion._periodo_liquidacion_ciclo_16_15? Búsqueda en la BD
+# real (ago-2026): NINGUNA de las 58 filas EIAC reconstruidas tiene
+# `aplica=True` en corregir_periodo_liquidacion_vida_mensual, porque
+# construir_facturacion_desde_eiac deja `duracion_recibo_meses=None` en TODAS
+# ellas (nunca lo popula) y `es_ciclo_mensual = duracion.round(0) == 1` da
+# `False` para NaN -- así que ninguna fila EIAC pasa nunca por esta función,
+# sin importar el día. Casos reales confirmados: 63948441/63948448 (EIAC
+# puro, fecha_desde día 27, sin CSV oficial todavía) se quedan con el
+# "2026-03" ya calculado por _periodo_liquidacion_ciclo_16_15, sin tocar; la
+# póliza 63948186 (CSV oficial, día 26) sí pasa por la función pero su
+# literal YA era "mes siguiente" -- la sobrescritura reproduce el MISMO
+# valor, nunca lo desplaza un mes más.
+
+
+def test_filas_eiac_nunca_se_tocan_mientras_duracion_recibo_meses_sea_none(contrato):
+    # Simula una fila de facturacion_eiac real (cartera="EIAC",
+    # duracion_recibo_meses=None SIEMPRE -- ver construir_facturacion_desde_eiac)
+    # con fecha_desde.day=27 (>=15, dispararía la corrección si el guard de
+    # duración no la bloqueara) y un periodo_liquidacion deliberadamente
+    # DISTINTO al que _periodo_mes_siguiente calcularía ("2026-05" en vez de
+    # "2026-03") -- si la función la tocara aunque fuera por casualidad,
+    # este test lo detectaría; si el guard de duración funciona, se queda
+    # exactamente igual.
+    df_facturacion = pd.DataFrame(
+        [
+            {"poliza": "63948441", "fecha_desde": date(2026, 2, 27), "fecha_hasta": None,
+             "periodo_liquidacion": "2026-05", "duracion_recibo_meses": None, "cartera": "EIAC"},
+        ]
+    )
+    df_polizas = pd.DataFrame([{"poliza": "63948441", "razon_social": "ASISA VIDA TRANQUILIDAD"}])
+    corregido = corregir_periodo_liquidacion_vida_mensual(df_facturacion, df_polizas, contrato)
+    assert corregido.iloc[0]["periodo_liquidacion"] == "2026-05"
+
+
+def test_guard_dia_15_no_duplica_desplazamiento_con_dia_mayor_o_igual_16(contrato):
+    # Caso real: póliza 63948186 (ASISA VIDA TRANQUILIDAD, CSV oficial,
+    # cartera="VIDA INDIVIDUAL"), ventana fecha_desde=2026-04-26 (día 26,
+    # bien pasado el corte). El literal de Facturación YA es "2026-05" (mes
+    # siguiente al de fecha_desde) -- el mismo resultado que calcularía
+    # _periodo_mes_siguiente. La corrección SÍ se aplica aquí (duracion=1.0),
+    # pero por ser una sobrescritura (no una suma), debe reproducir el MISMO
+    # "2026-05" -- nunca "2026-06", que sería la señal de un doble
+    # desplazamiento.
+    df_facturacion = pd.DataFrame(
+        [
+            {"poliza": "63948186", "fecha_desde": date(2026, 4, 26), "fecha_hasta": date(2026, 5, 26),
+             "periodo_liquidacion": "2026-05", "duracion_recibo_meses": 1.0, "cartera": "VIDA INDIVIDUAL"},
+        ]
+    )
+    df_polizas = pd.DataFrame([{"poliza": "63948186", "razon_social": "ASISA VIDA TRANQUILIDAD"}])
+    corregido = corregir_periodo_liquidacion_vida_mensual(df_facturacion, df_polizas, contrato)
+    assert corregido.iloc[0]["periodo_liquidacion"] == "2026-05"

@@ -44,6 +44,7 @@ from engine.comisiones import (
     aplicar_retencion,
     estimar_comision_poliza,
     obtener_estado_anualizacion_salud,
+    periodo_liquidacion_ordenable,
     refinar_confianza_producto_asumido,
 )
 from engine.config_contrato import ContratoConfig
@@ -102,13 +103,91 @@ class EstimacionPeriodo:
     exclusiones_anualizacion_salud: list[EstadoAnualizacionSalud] = field(default_factory=list)
 
 
+@dataclass
+class ComisionRealPeriodo:
+    """Comisión bruta YA CONFIRMADA por la Liquidación real de ASISA para
+    un periodo — ver `comision_bruta_real_periodo`."""
+
+    periodo: str
+    comision_salud: float
+    comision_vida: float
+    comision_bruta: float
+    num_movimientos: int
+
+
+def comision_bruta_real_periodo(
+    df_liquidacion: pd.DataFrame, contrato: ContratoConfig, periodo: str
+) -> ComisionRealPeriodo | None:
+    """Suma la comisión bruta YA liquidada por ASISA para `periodo`
+    (columna `comision` de cada línea de Liquidación, agrupada Salud/Vida
+    por `razon_social`) — o `None` si Liquidación todavía no tiene ningún
+    movimiento de ese periodo (ausencia de dato, nunca se confunde con un
+    0€ real).
+
+    "El CSV oficial siempre gana sobre EIAC" (ver `engine.eiac_integracion`)
+    tiene aquí su equivalente: la Liquidación real, cuando ya existe para
+    un periodo, gana sobre lo que `estimar_comision_y_rappel_periodo`
+    hubiera predicho — ver `_mostrar_bloque_produccion_periodo` en el
+    dashboard, que llama a esta función ANTES de decidir si muestra el
+    estimado o el real. Caso real que motivó esto (ago-2026): "Comisión
+    Salud estimada" de agosto sobreestimaba en +109,11€ porque el
+    estimador nunca ve regularizaciones posteriores a la primera alta de
+    una póliza (extornos/reanualizaciones) — en cuanto la Liquidación real
+    del periodo está cargada, ya no hace falta seguir adivinando.
+
+    Deliberadamente NO calcula `total_bruto`/`total_neto`: el rappel no
+    viene desglosado por póliza en Liquidación (es un concepto de la
+    factura completa, no de cada línea), así que quien use este resultado
+    debe seguir combinando esta comisión real con el rappel ESTIMADO
+    (`calcular_rappel_inicial`) — nunca inventar un rappel real que
+    todavía no está confirmado.
+    """
+    if df_liquidacion.empty or "periodo_liquidacion" not in df_liquidacion.columns:
+        return None
+    normalizado = df_liquidacion["periodo_liquidacion"].map(periodo_liquidacion_ordenable)
+    movimientos = df_liquidacion[normalizado == periodo]
+    if movimientos.empty:
+        return None
+
+    es_vida = movimientos["razon_social"].isin(contrato.comisiones_vida.keys())
+    comision_vida = round(float(movimientos.loc[es_vida, "comision"].sum()), 2)
+    comision_salud = round(float(movimientos.loc[~es_vida, "comision"].sum()), 2)
+    return ComisionRealPeriodo(
+        periodo=periodo,
+        comision_salud=comision_salud,
+        comision_vida=comision_vida,
+        comision_bruta=round(comision_salud + comision_vida, 2),
+        num_movimientos=len(movimientos),
+    )
+
+
+# Día a partir del cual una ventana mensual de Vida se considera "cerca del
+# corte" y puede sufrir el desfase de un mes que corrige esta función -- ver
+# docstring de corregir_periodo_liquidacion_vida_mensual. Confirmado con
+# datos reales: las 4 ventanas de 64110228/64110254 (el caso que motivó la
+# excepción) tienen TODAS fecha_desde en día 15 exacto, ninguna en otro día.
+# Un segundo caso real (ago-2026, póliza 64358396, fecha_desde=2026-08-05)
+# confirmó el otro extremo: la Liquidación real de agosto la liquidó en
+# "2026-08" -- el MISMO mes que ya decía el CSV oficial, sin desfase alguno
+# -- así que aplicar el desfase de "+1 mes" a un día 5 la habría desplazado
+# a septiembre por error (bug real encontrado ago-2026, produjo un 0€ en
+# "Comisión Vida estimada" de Vista rápida para esta póliza). Con solo estos
+# dos puntos de datos (día 15 sí, día 5 no) no se puede afinar más que un
+# umbral: día 15 -- el día justo anterior al corte general de 16 que usa el
+# resto del proyecto (`engine.eiac_integracion._DIA_CORTE_CICLO`) -- es la
+# lectura más conservadora que cubre el caso confirmado sin extender el
+# desfase a fechas alejadas del corte donde no hay evidencia real.
+_DIA_CERCA_DEL_CORTE_VIDA_MENSUAL = 15
+
+
 def corregir_periodo_liquidacion_vida_mensual(
     df_facturacion: pd.DataFrame, df_polizas: pd.DataFrame, contrato: ContratoConfig
 ) -> pd.DataFrame:
     """Corrige `periodo_liquidacion` SOLO para recibos de Vida con ciclo
-    mensual conocido (`duracion_recibo_meses` ≈ 1), cuando el valor
-    literal del CSV de Facturación no coincide con el que le corresponde
-    según su propia `fecha_desde`.
+    mensual conocido (`duracion_recibo_meses` ≈ 1) cuya `fecha_desde` cae
+    cerca del corte del ciclo (día >= `_DIA_CERCA_DEL_CORTE_VIDA_MENSUAL`),
+    cuando el valor literal del CSV de Facturación no coincide con el que
+    le corresponde según su propia `fecha_desde`.
 
     EXCEPCIÓN PUNTUAL, no una reversión de la regla general — "el CSV
     oficial siempre gana" sigue aplicando sin cambios a Salud (y a Vida
@@ -133,6 +212,21 @@ def corregir_periodo_liquidacion_vida_mensual(
     puntual de Facturación que resultó estar mal etiquetado en el
     fichero de origen para estas ventanas mensuales de Vida.
 
+    GUARD POR DÍA (ago-2026, caso real póliza 64358396, fecha_desde=
+    2026-08-05, prima 38,26€): el fix original aplicaba el desfase de "+1
+    mes" a CUALQUIER ventana mensual de Vida, sin mirar el día de
+    `fecha_desde` — bug real: 64358396 tenía fecha_desde día 5 (lejos del
+    corte), el CSV oficial YA decía correctamente `periodo_liquidacion=
+    "2026-08"`, y la Liquidación real de agosto confirmó ese mismo periodo
+    (comisión 22,96€, 08-2026) — pero la función la desplazaba igualmente a
+    "2026-09", haciendo que "Comisión Vida estimada" de agosto en Vista
+    rápida la excluyera por completo. Las 4 ventanas reales de 64110228/
+    64110254 que sí necesitan el desfase tienen TODAS fecha_desde en día 15
+    exacto — así que el desfase ahora solo se aplica cuando
+    `fecha_desde.day >= _DIA_CERCA_DEL_CORTE_VIDA_MENSUAL` (15); una
+    ventana con fecha_desde claramente alejada del corte (día 5, por
+    ejemplo) se deja intacta con el periodo_liquidacion literal del CSV.
+
     NO aplica a la póliza 64131545 (AV ACCIDENTES SENIOR, Vida mensual->
     anual prepago con `duracion_recibo_meses`=12): ahí el literal
     "2026-06" SÍ coincide con la Liquidación real, así que forzar aquí el
@@ -152,7 +246,9 @@ def corregir_periodo_liquidacion_vida_mensual(
     duracion = pd.to_numeric(df_facturacion["duracion_recibo_meses"], errors="coerce")
     es_ciclo_mensual = duracion.round(0) == 1
     fecha_desde_valida = df_facturacion["fecha_desde"].notna()
-    aplica = es_vida & es_ciclo_mensual & fecha_desde_valida
+    dia_fecha_desde = pd.to_datetime(df_facturacion["fecha_desde"], errors="coerce").dt.day
+    es_cerca_del_corte = dia_fecha_desde >= _DIA_CERCA_DEL_CORTE_VIDA_MENSUAL
+    aplica = es_vida & es_ciclo_mensual & fecha_desde_valida & es_cerca_del_corte
     if not aplica.any():
         return df_facturacion
 

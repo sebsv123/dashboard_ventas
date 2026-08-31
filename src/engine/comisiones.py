@@ -94,11 +94,11 @@ def obtener_estado_anualizacion_salud(
     if df_liquidacion.empty or "poliza" not in df_liquidacion.columns:
         return EstadoAnualizacionSalud(poliza, False)
 
-    periodo_limite = _periodo_liquidacion_ordenable(periodo_estimado)
+    periodo_limite = periodo_liquidacion_ordenable(periodo_estimado)
     movimientos = df_liquidacion[df_liquidacion["poliza"] == poliza].copy()
     if movimientos.empty or "periodo_liquidacion" not in movimientos.columns:
         return EstadoAnualizacionSalud(poliza, False)
-    movimientos["_periodo"] = movimientos["periodo_liquidacion"].map(_periodo_liquidacion_ordenable)
+    movimientos["_periodo"] = movimientos["periodo_liquidacion"].map(periodo_liquidacion_ordenable)
     movimientos = movimientos[movimientos["_periodo"] < periodo_limite]
     if movimientos.empty:
         return EstadoAnualizacionSalud(poliza, False)
@@ -336,7 +336,7 @@ class HistorialAjustesPoliza:
     ultimo_accion: str | None = None
 
 
-def _periodo_liquidacion_ordenable(periodo: object) -> str:
+def periodo_liquidacion_ordenable(periodo: object) -> str:
     """Normaliza un periodo de Liquidación a "AAAA-MM" para poder ordenar
     cronológicamente.
 
@@ -373,7 +373,7 @@ def evaluar_historial_ajustes_poliza(df_liquidacion: pd.DataFrame, poliza: str) 
         return HistorialAjustesPoliza(poliza, tiene_ajustes_previos=False, num_eventos=0)
 
     ordenados = eventos.assign(
-        _orden=eventos["periodo_liquidacion"].map(_periodo_liquidacion_ordenable)
+        _orden=eventos["periodo_liquidacion"].map(periodo_liquidacion_ordenable)
     ).sort_values("_orden")
     ultimo = ordenados.iloc[-1]
     return HistorialAjustesPoliza(
