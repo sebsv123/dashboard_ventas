@@ -191,8 +191,10 @@ def cargar_eiac_polizas(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
                 (id_poliza, cliente_codigo, numero_poliza, situacion_poliza,
                  clase_poliza, fecha_efecto_inicial, fecha_emision, descripcion_riesgo,
                  descripcion_ramo, codigo_entidad_interno, ramo_entidad,
-                 fecha_anulacion, motivo_anulacion, prima_neta_poliza)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 fecha_anulacion, motivo_anulacion, prima_neta_poliza,
+                 prima_neta_anualizada_poli,
+                 fecha_fin_seguro, coberturas_wanderlust)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id_poliza) DO UPDATE SET
                 cliente_codigo=excluded.cliente_codigo,
                 numero_poliza=excluded.numero_poliza,
@@ -206,7 +208,10 @@ def cargar_eiac_polizas(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
                 ramo_entidad=excluded.ramo_entidad,
                 fecha_anulacion=excluded.fecha_anulacion,
                 motivo_anulacion=excluded.motivo_anulacion,
-                prima_neta_poliza=COALESCE(excluded.prima_neta_poliza, eiac_polizas.prima_neta_poliza)
+                prima_neta_poliza=COALESCE(excluded.prima_neta_poliza, eiac_polizas.prima_neta_poliza),
+                prima_neta_anualizada_poli=COALESCE(excluded.prima_neta_anualizada_poli, eiac_polizas.prima_neta_anualizada_poli),
+                fecha_fin_seguro=COALESCE(excluded.fecha_fin_seguro, eiac_polizas.fecha_fin_seguro),
+                coberturas_wanderlust=COALESCE(excluded.coberturas_wanderlust, eiac_polizas.coberturas_wanderlust)
             """,
             (
                 r["id_poliza"], r["cliente_codigo"], r["numero_poliza"], r["situacion_poliza"],
@@ -214,7 +219,9 @@ def cargar_eiac_polizas(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
                 _fecha_a_texto(r["fecha_emision"]), r["descripcion_riesgo"],
                 r["descripcion_ramo"], r["codigo_entidad_interno"], r["ramo_entidad"],
                 _fecha_a_texto(r["fecha_anulacion"]), r["motivo_anulacion"],
-                r.get("prima_neta_poliza"),
+                r.get("prima_neta_poliza"), r.get("prima_neta_anualizada_poli"),
+                _fecha_a_texto(r.get("fecha_fin_seguro")),
+                r.get("coberturas_wanderlust"),
             ),
         )
         filas_insertadas += 1

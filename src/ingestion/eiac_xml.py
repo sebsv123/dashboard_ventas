@@ -129,6 +129,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+import json
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -155,6 +156,7 @@ COLUMNAS_POLIZAS = [
     "clase_poliza", "fecha_efecto_inicial", "fecha_emision", "descripcion_riesgo",
     "descripcion_ramo", "codigo_entidad_interno", "ramo_entidad",
     "fecha_anulacion", "motivo_anulacion", "prima_neta_poliza",
+    "prima_neta_anualizada_poli", "fecha_fin_seguro", "coberturas_wanderlust",
 ]
 
 COLUMNAS_POLIZAS_RIESGOS = [
@@ -301,6 +303,34 @@ def _riesgo_principal(poliza: ET.Element) -> str | None:
     return None
 
 
+def _coberturas_wanderlust(poliza: ET.Element) -> list[dict]:
+    """Conserva coberturas POLI con su riesgo/asegurado.
+
+    La granularidad de riesgo evita convertir una cobertura familiar en una
+    sola cifra agregada y permite reconstruir suplementos sin perder quién
+    estaba asegurado en cada observación.
+    """
+    resultado = []
+    for riesgo in poliza.findall("e:DatosRiesgos/e:Riesgo", _NS):
+        datos_riesgo = {
+            "id_riesgo": _texto(riesgo, "IdRiesgo"),
+            "numero_orden": _texto(riesgo, "NumeroOrden"),
+            "asegurado": _texto(riesgo, "DescripcionRiesgo"),
+        }
+        for cobertura in riesgo.findall("e:DatosCoberturas/e:Cobertura", _NS):
+            resultado.append(
+                {
+                    **datos_riesgo,
+                    "id_cobertura": _texto(cobertura, "IdCobertura"),
+                    "descripcion": _texto(cobertura, "DescripcionCobertura"),
+                    "capital_asegurado": _decimal(cobertura, "CapitalAsegurado"),
+                    "prima_neta": _decimal(cobertura, "DatosImportes/PrimaNeta"),
+                    "prima_total": _decimal(cobertura, "DatosImportes/PrimaTotal"),
+                }
+            )
+    return resultado
+
+
 def parsear_eiac_polizas(path: str | Path) -> pd.DataFrame:
     """Parsea un fichero "EIAC-ENV-POLI-*.xml" a un DataFrame, una fila por póliza.
 
@@ -342,6 +372,13 @@ def parsear_eiac_polizas(path: str | Path) -> pd.DataFrame:
                 "fecha_anulacion": _fecha(poliza, "DatosAnulacion/FechaAnulacion"),
                 "motivo_anulacion": _texto(poliza, "DatosAnulacion/MotivoAnulacion"),
                 "prima_neta_poliza": _decimal(poliza, "DatosImportes/Importes/PrimaNeta"),
+                "prima_neta_anualizada_poli": _decimal(
+                    poliza, "DatosImportes/ImportesDEC/PrimaNetaAnualizada"
+                ),
+                "fecha_fin_seguro": _fecha(poliza, "Fechas/FechaFinSeguro"),
+                "coberturas_wanderlust": json.dumps(
+                    _coberturas_wanderlust(poliza), ensure_ascii=False, separators=(",", ":")
+                ),
             }
         )
 

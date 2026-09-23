@@ -18,7 +18,7 @@ from engine.calibracion import calcular_calibracion
 from engine.config_contrato import ContratoConfig
 from engine.insights import resumen_produccion_periodo, siguiente_periodo
 from engine.objetivo import calcular_objetivo_anual
-from engine.wanderlust import calcular_pae_anual
+from engine.wanderlust import calcular_pae_anual, redondear_euros
 
 
 def _meses_del_anio_sin_datos(
@@ -121,7 +121,8 @@ def _fecha_corte_mes_anterior(hoy: date) -> date:
 
 
 def _hoja_wanderlust(
-    df_polizas: pd.DataFrame, df_facturacion: pd.DataFrame, contrato: ContratoConfig, hoy: date
+    df_polizas: pd.DataFrame, df_facturacion: pd.DataFrame, contrato: ContratoConfig, hoy: date,
+    df_eiac_polizas: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Desglose por categoría del PAE (Primas Anualizadas Equivalentes) del
     incentivo Wanderlust — mismo motor y mismo criterio de transparencia que
@@ -134,10 +135,13 @@ def _hoja_wanderlust(
     útil para comparar contra un correo de seguimiento de ASISA con una
     fecha de corte concreta (p.ej. "a 30 de junio").
     """
-    resultado = calcular_pae_anual(df_polizas, df_facturacion, contrato, anio=hoy.year)
+    resultado = calcular_pae_anual(
+        df_polizas, df_facturacion, contrato, anio=hoy.year,
+        df_eiac_polizas=df_eiac_polizas, fecha_corte=hoy,
+    )
 
     filas = [
-        {"Categoría": d.categoria, "PAE (€)": d.pae, "Altas": d.polizas_alta, "Anuladas": d.polizas_baja, "Nota": ""}
+        {"Categoría": d.categoria, "PAE (€)": redondear_euros(d.pae), "Altas": d.polizas_alta, "Anuladas": d.polizas_baja, "Nota": ""}
         for d in sorted(resultado.por_categoria.values(), key=lambda d: -d.pae)
     ]
     filas.append(
@@ -148,6 +152,31 @@ def _hoja_wanderlust(
             "Anuladas": sum(d.polizas_baja for d in resultado.por_categoria.values()),
             "Nota": "",
         }
+    )
+    filas.extend(
+        [
+            {
+                "Categoría": f"PAE efectivo a {hoy.isoformat()}",
+                "PAE (€)": resultado.pae_efectivo,
+                "Altas": None,
+                "Anuladas": None,
+                "Nota": "Producción con fecha_efecto hasta la fecha actual; las anulaciones efectivas se aplican según su estado.",
+            },
+            {
+                "Categoría": "PAE futuro ya emitido",
+                "PAE (€)": resultado.pae_futuro,
+                "Altas": None,
+                "Anuladas": None,
+                "Nota": "Producción 2026 con fecha_efecto posterior a la fecha actual.",
+            },
+            {
+                "Categoría": "PAE total 2026 comprometido",
+                "PAE (€)": resultado.pae_total,
+                "Altas": None,
+                "Anuladas": None,
+                "Nota": "Suma del PAE efectivo y el futuro ya emitido.",
+            },
+        ]
     )
 
     if resultado.sin_categoria:
@@ -188,7 +217,10 @@ def _hoja_wanderlust(
             df_polizas["fecha_efecto"].notna()
             & (pd.to_datetime(df_polizas["fecha_efecto"]) <= pd.Timestamp(corte))
         ]
-        resultado_corte = calcular_pae_anual(df_polizas_corte, df_facturacion, contrato, anio=hoy.year)
+        resultado_corte = calcular_pae_anual(
+            df_polizas_corte, df_facturacion, contrato, anio=hoy.year,
+            df_eiac_polizas=df_eiac_polizas, fecha_corte=corte,
+        )
         filas.append(
             {
                 "Categoría": f"PAE acumulado a {corte.isoformat()} (mes anterior completo)",
@@ -280,7 +312,9 @@ def construir_excel_completo(
         _hoja_objetivo_anual(df_polizas, df_facturacion, contrato, hoy).to_excel(
             writer, sheet_name="Objetivo anual", index=False
         )
-        _hoja_wanderlust(df_polizas, df_facturacion, contrato, hoy).to_excel(
+        _hoja_wanderlust(
+            df_polizas, df_facturacion, contrato, hoy, df_eiac_polizas=df_eiac_polizas
+        ).to_excel(
             writer, sheet_name="Wanderlust PAE", index=False
         )
         _hoja_calibracion(df_polizas, df_facturacion, df_factura_pdf, contrato, df_liquidacion).to_excel(

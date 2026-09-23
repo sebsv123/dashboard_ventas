@@ -141,6 +141,9 @@ CREATE TABLE IF NOT EXISTS eiac_polizas (
     -- provisional por fecha de efecto ANTES de que llegue el recibo real
     -- (ver engine.eiac_integracion.construir_facturacion_desde_eiac).
     prima_neta_poliza REAL,
+    prima_neta_anualizada_poli REAL,
+    fecha_fin_seguro TEXT,
+    coberturas_wanderlust TEXT,
     fecha_import TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(id_poliza)
 );
@@ -254,6 +257,9 @@ def inicializar_schema(conn: sqlite3.Connection) -> None:
     _asegurar_columna(conn, "eiac_polizas", "fecha_anulacion", "TEXT")
     _asegurar_columna(conn, "eiac_polizas", "motivo_anulacion", "TEXT")
     _asegurar_columna(conn, "eiac_polizas", "prima_neta_poliza", "REAL")
+    _asegurar_columna(conn, "eiac_polizas", "prima_neta_anualizada_poli", "REAL")
+    _asegurar_columna(conn, "eiac_polizas", "fecha_fin_seguro", "TEXT")
+    _asegurar_columna(conn, "eiac_polizas", "coberturas_wanderlust", "TEXT")
     _asegurar_columna(conn, "eiac_recibos", "ramo_entidad", "TEXT")
     _asegurar_columna(conn, "eiac_recibos", "descripcion_ramo", "TEXT")
     _asegurar_columna(conn, "eiac_recibos", "codigo_entidad_interno", "TEXT")

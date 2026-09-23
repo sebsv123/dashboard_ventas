@@ -71,7 +71,9 @@ defecto hasta que llegue el CSV oficial que lo confirme o lo desmienta.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from decimal import Decimal, ROUND_HALF_UP
 
 import pandas as pd
 
@@ -95,9 +97,16 @@ CATEGORIA_SALUD_POR_RAZON_SOCIAL = {
 CATEGORIA_VIDA = "ASISA Vida"
 
 
+def redondear_euros(valor: float) -> float:
+    """Redondeo monetario reproducible, con medio céntimo hacia arriba."""
+    return float(Decimal(str(round(float(valor), 6))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
 def _categoria(razon_social: str, contrato: ContratoConfig) -> str | None:
     """Categoría PAE de una póliza a partir de su razon_social, o None si no
     se reconoce (ni Vida ni ninguna clave de `CATEGORIA_SALUD_POR_RAZON_SOCIAL`)."""
+    if razon_social == "AV ACCIDENTES SENIOR":
+        return "ASISA Accidentes"
     if razon_social in contrato.comisiones_vida:
         return CATEGORIA_VIDA
     return CATEGORIA_SALUD_POR_RAZON_SOCIAL.get(razon_social)
@@ -150,10 +159,12 @@ class ResultadoPae:
     # Pólizas con fecha_efecto en el año pero razon_social no reconocida
     # (ni Vida ni ninguna categoría de Salud conocida) — no suman al total.
     sin_categoria: int = 0
+    pae_efectivo: float = 0.0
+    pae_futuro: float = 0.0
 
     @property
     def pae_total(self) -> float:
-        return round(sum(d.pae for d in self.por_categoria.values()), 2)
+        return redondear_euros(sum(redondear_euros(d.pae) for d in self.por_categoria.values()))
 
     @property
     def porcentaje(self) -> float | None:
@@ -168,6 +179,8 @@ def calcular_pae_anual(
     contrato: ContratoConfig,
     anio: int,
     objetivo: float | None = None,
+    df_eiac_polizas: pd.DataFrame | None = None,
+    fecha_corte=None,
 ) -> ResultadoPae:
     """PAE acumulado del año `anio`, desglosado por categoría de producto.
 
@@ -189,28 +202,60 @@ def calcular_pae_anual(
     """
     objetivo_final = objetivo if objetivo is not None else contrato.wanderlust_objetivo_paes
     resultado = ResultadoPae(anio=anio, objetivo=objetivo_final)
-    if df_polizas.empty or df_facturacion.empty:
+    if df_polizas.empty and (df_eiac_polizas is None or df_eiac_polizas.empty):
         return resultado
 
     primeras = _primer_recibo_con_fecha_hasta(df_facturacion)
+    recibos = primeras.set_index("poliza").to_dict("index") if not primeras.empty else {}
+    eiac_por_poliza = {}
+    if df_eiac_polizas is not None and not df_eiac_polizas.empty:
+        for _, eiac in df_eiac_polizas.iterrows():
+            numero = str(eiac.get("numero_poliza", ""))
+            if numero and numero != "nan":
+                eiac_por_poliza[numero] = eiac
 
     columnas = ["poliza", "razon_social", "forma_pago", "fecha_efecto"]
-    if "situacion" in df_polizas.columns:
-        columnas.append("situacion")
-    if "fecha_baja" in df_polizas.columns:
-        columnas.append("fecha_baja")
-    fusion = primeras.merge(df_polizas[columnas], on="poliza", how="inner")
+    columnas += [c for c in ("situacion", "fecha_baja") if c in df_polizas.columns]
+    filas = df_polizas[columnas].to_dict("records") if not df_polizas.empty else []
+    existentes = {str(f["poliza"]) for f in filas}
+    if df_eiac_polizas is not None:
+        for _, eiac in df_eiac_polizas.iterrows():
+            numero = str(eiac.get("numero_poliza", ""))
+            if not numero or numero == "nan" or numero in existentes:
+                continue
+            ramo = str(eiac.get("ramo_entidad") or "").upper()
+            razon = "ASISA TRAVEL AND YOU" if ramo == "RAVI" else (
+                "ASISA VIDA TRANQUILIDAD" if ramo == "VIDA" else "ASISA PARTICULARES"
+            )
+            filas.append({
+                "poliza": numero, "razon_social": razon, "forma_pago": None,
+                "fecha_efecto": eiac.get("fecha_efecto_inicial"),
+                "situacion": "B" if eiac.get("situacion_poliza") in {"EX", "BJ"} else "A",
+                "fecha_baja": eiac.get("fecha_anulacion"),
+            })
+    fusion = pd.DataFrame(filas)
     if fusion.empty:
         return resultado
-
     fusion = fusion.dropna(subset=["fecha_efecto"])
-    if fusion.empty:
-        return resultado
     fusion = fusion[pd.to_datetime(fusion["fecha_efecto"]).dt.year == anio]
-    if fusion.empty:
-        return resultado
 
     multiplicadores = contrato.wanderlust_multiplicadores
+    codigos_embebidos = {
+        "GS30": ("ASISA Dental", 1.5),
+        "GS09": ("ASISA Hospitalización", 4.0),
+        "GS99": ("ASISA Accidentes", 4.0),
+    }
+
+    def _coberturas(eiac):
+        if eiac is None:
+            return []
+        valor = eiac.get("coberturas_wanderlust")
+        if not valor or pd.isna(valor):
+            return []
+        try:
+            return json.loads(valor) if isinstance(valor, str) else valor
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
 
     for _, fila in fusion.iterrows():
         categoria = _categoria(fila["razon_social"], contrato)
@@ -219,19 +264,84 @@ def calcular_pae_anual(
             resultado.sin_categoria += 1
             continue
 
-        prima_anual = fila["prima_neta"] if fila["forma_pago"] == "A" else fila["prima_neta"] * 12
-        pae_poliza = prima_anual * multiplicador
+        eiac = eiac_por_poliza.get(str(fila["poliza"]))
+        recibo = recibos.get(str(fila["poliza"]), {})
+        forma_pago = str(fila.get("forma_pago") or "").upper()
+        prima_fact = recibo.get("prima_neta")
+        prima_fact_anual = None
+        if prima_fact is not None and not pd.isna(prima_fact):
+            prima_fact_anual = float(prima_fact) * (1.0 if forma_pago in {"A", "U"} else 12.0)
+        es_travel = categoria == "ASISA Travel"
+        prima_poli = None
+        if eiac is not None:
+            prima_poli = eiac.get("prima_neta_poliza") if es_travel else eiac.get("prima_neta_anualizada_poli")
+            if prima_poli is None or pd.isna(prima_poli):
+                prima_poli = eiac.get("prima_neta_poliza")
+        prima_anual = float(prima_poli) if prima_poli is not None and not pd.isna(prima_poli) else prima_fact_anual
+        if prima_anual is None:
+            resultado.sin_categoria += 1
+            continue
+        coberturas = _coberturas(eiac)
+        es_salud = categoria in {"Salud Particulares", "Salud colectivos privados"}
+        embebidas = []
+        if es_salud:
+            for cobertura in coberturas:
+                codigo = str(cobertura.get("id_cobertura") or "").upper()
+                if codigo in codigos_embebidos and cobertura.get("prima_neta") is not None:
+                    embebidas.append((codigo, float(cobertura["prima_neta"])))
 
         desglose = resultado.por_categoria.setdefault(categoria, DesgloseCategoriaPae(categoria))
-        es_anulada = fila.get("situacion") == "B"
-        if es_anulada and not _es_vencimiento_natural(fila.get("fecha_baja"), fila.get("fecha_hasta")):
-            desglose.pae -= pae_poliza
-            desglose.polizas_baja += 1
+        pae_salud = 0.0
+        pae_embebidas = 0.0
+        if embebidas and es_salud:
+            prima_salud = max(prima_anual - sum(prima for _, prima in embebidas), 0.0)
+            pae_salud = prima_salud * multiplicador
+            for codigo, prima in embebidas:
+                _, multiplicador_extra = codigos_embebidos[codigo]
+                pae_embebidas += prima * multiplicador_extra
+            pae_poliza = pae_salud + pae_embebidas
         else:
-            desglose.pae += pae_poliza
+            pae_poliza = prima_anual * multiplicador
+        es_anulada = fila.get("situacion") == "B"
+        if eiac is not None and eiac.get("situacion_poliza") in {"EX", "BJ", "AN"}:
+            es_anulada = True
+        fecha_baja = fila.get("fecha_baja")
+        if (fecha_baja is None or pd.isna(fecha_baja)) and eiac is not None:
+            fecha_baja = eiac.get("fecha_anulacion")
+        fecha_hasta = recibo.get("fecha_hasta")
+        if pd.isna(fecha_hasta):
+            fecha_hasta = None
+        if fecha_hasta is None and eiac is not None:
+            fecha_hasta = eiac.get("fecha_fin_seguro")
+        efecto = pd.Timestamp(fila["fecha_efecto"])
+        anulacion_real = es_anulada and not _es_vencimiento_natural(fecha_baja, fecha_hasta)
+        # Una anulación con efecto el mismo día (o antes) del alta no llegó
+        # a ser producción: se excluye, no se convierte en PAE negativo.
+        anulacion_antes_de_producir = (
+            anulacion_real and fecha_baja is not None and not pd.isna(fecha_baja)
+            and pd.Timestamp(fecha_baja) <= efecto
+        )
+        signo = 0.0 if anulacion_antes_de_producir else (-1.0 if anulacion_real else 1.0)
+        if embebidas and es_salud:
+            desglose.pae += signo * pae_salud
+            for codigo, prima in embebidas:
+                categoria_extra, multiplicador_extra = codigos_embebidos[codigo]
+                extra = resultado.por_categoria.setdefault(categoria_extra, DesgloseCategoriaPae(categoria_extra))
+                extra.pae += signo * prima * multiplicador_extra
+        else:
+            desglose.pae += signo * pae_poliza
+        if signo < 0:
+            desglose.polizas_baja += 1
+        elif signo > 0:
             desglose.polizas_alta += 1
 
-    for desglose in resultado.por_categoria.values():
-        desglose.pae = round(desglose.pae, 2)
+        if fecha_corte is not None:
+            if efecto <= pd.Timestamp(fecha_corte):
+                resultado.pae_efectivo += signo * pae_poliza
+            else:
+                resultado.pae_futuro += signo * pae_poliza
+
+    resultado.pae_efectivo = redondear_euros(resultado.pae_efectivo)
+    resultado.pae_futuro = redondear_euros(resultado.pae_futuro)
 
     return resultado

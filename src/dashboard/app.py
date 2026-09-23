@@ -1294,7 +1294,7 @@ with tab_wanderlust:
 
     resultado_pae = calcular_pae_anual(
         df_polizas_con_eiac, df_facturacion_con_eiac, contrato,
-        anio=_anio_pae, objetivo=objetivo_pae,
+        anio=_anio_pae, objetivo=objetivo_pae, df_eiac_polizas=df_eiac_polizas,
     )
 
     if objetivo_pae:

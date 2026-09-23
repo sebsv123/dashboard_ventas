@@ -226,3 +226,62 @@ def test_df_vacios_no_revienta(contrato):
     assert resultado.pae_total == 0.0
     assert resultado.por_categoria == {}
     assert resultado.porcentaje == 0.0
+
+
+def test_forma_pago_u_no_se_anualiza(contrato):
+    """U ya representa una prima anual/prepago; no se multiplica por 12."""
+    resultado = calcular_pae_anual(
+        pd.DataFrame([_poliza("63927786", "ASISA TRAVEL AND YOU", "U", "2026-01-21")]),
+        pd.DataFrame([_recibo("63927786", 29.13, "2026-01", "2026-01-21")]),
+        contrato, anio=2026,
+    )
+    assert resultado.por_categoria["ASISA Travel"].pae == pytest.approx(14.565)
+
+
+def test_coberturas_eiac_embebidas_se_reparten_sin_doble_conteo(contrato):
+    polizas = pd.DataFrame([_poliza("SALUD-GS", "ASISA PARTICULARES", "A", "2026-01-01")])
+    facturacion = pd.DataFrame([_recibo("SALUD-GS", 100.0, "2026-01", "2026-01-01")])
+    eiac = pd.DataFrame([{
+        "numero_poliza": "SALUD-GS",
+        "coberturas_wanderlust": (
+            '[{"id_cobertura":"GS30","prima_neta":10},'
+            '{"id_cobertura":"GS09","prima_neta":20},'
+            '{"id_cobertura":"GS99","prima_neta":5},'
+            '{"id_cobertura":"GS29","prima_neta":65}]'
+        ),
+    }])
+    resultado = calcular_pae_anual(polizas, facturacion, contrato, 2026, df_eiac_polizas=eiac)
+    # Salud: 100 - 10 - 20 - 5 = 65; los ramos embebidos se muestran aparte.
+    assert resultado.por_categoria["Salud Particulares"].pae == pytest.approx(65.0)
+    assert resultado.por_categoria["ASISA Dental"].pae == pytest.approx(15.0)
+    assert resultado.por_categoria["ASISA Hospitalización"].pae == pytest.approx(80.0)
+    assert resultado.por_categoria["ASISA Accidentes"].pae == pytest.approx(20.0)
+    assert resultado.pae_total == pytest.approx(180.0)
+
+
+def test_total_2026_regresion_79291_51(contrato):
+    """Control del total auditado, incluyendo futuro ya emitido y Travel válido."""
+    filas_polizas = [
+        _poliza("H-ACT", "ASISA PARTICULARES", "A", "2026-01-01"),
+        _poliza("H-FUT", "ASISA PARTICULARES", "A", "2026-10-01"),
+        _poliza("HOS-FUT", "HOSPITALIZACION", "A", "2026-10-01"),
+        _poliza("D", "DENTAL", "A", "2026-01-01"),
+        _poliza("H", "HOSPITALIZACION", "A", "2026-01-01"),
+        _poliza("AC", "ACCIDENTES", "A", "2026-01-01"),
+        _poliza("V", "ASISA VIDA TRANQUILIDAD", "A", "2026-01-01"),
+        _poliza("T1", "ASISA TRAVEL AND YOU", "U", "2026-01-21"),
+        _poliza("T2", "ASISA TRAVEL AND YOU", "A", "2026-06-10"),
+    ]
+    filas_recibos = [
+        _recibo("H-ACT", 48031.26, "2026-01", "2026-01-01"),
+        _recibo("H-FUT", 16012.96, "2026-10", "2026-10-01"),
+        _recibo("HOS-FUT", 52.80, "2026-10", "2026-10-01"),
+        _recibo("D", 2902.65, "2026-01", "2026-01-01"),
+        _recibo("H", 634.92, "2026-01", "2026-01-01"),
+        _recibo("AC", 268.19, "2026-01", "2026-01-01"),
+        _recibo("V", 1998.11, "2026-01", "2026-01-01"),
+        _recibo("T1", 29.13, "2026-01", "2026-01-21"),
+        _recibo("T2", 123.43, "2026-06", "2026-06-10"),
+    ]
+    resultado = calcular_pae_anual(pd.DataFrame(filas_polizas), pd.DataFrame(filas_recibos), contrato, 2026)
+    assert resultado.pae_total == pytest.approx(79291.51)
