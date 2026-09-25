@@ -1266,14 +1266,12 @@ with tab_wanderlust:
     )
     st.info(
         "⚠️ Multirramo Salud + Accidentes: el agente a veces vende "
-        "Accidentes dentro de una póliza de Salud, pero con los datos "
-        "actuales no hay forma fiable de distinguirlo — el campo SUBRAMO de "
-        "Liquidación solo se ha visto con el valor 'VACIO' y ni siquiera se "
-        "guarda hoy en la base de datos, y EIAC tampoco trae una señal "
-        "equivalente. Estas pólizas se clasifican solo por su razon_social "
-        "de Salud, así que el Accidentes incluido dentro de una multirramo "
-        "puede que no se contabilice aparte en 'ASISA Accidentes' todavía "
-        "— pendiente de confirmar con más datos."
+        "Accidentes dentro de una póliza de Salud. Cuando EIAC POLI trae "
+        "coberturas GS30 (Dental), GS09 (Hospitalización) o GS99 "
+        "(Accidentes) con sus primas, el PAE las separa de Salud sin "
+        "contarlas dos veces. Si faltan esos códigos o importes, no hay "
+        "datos suficientes para separarlas con fiabilidad y la póliza "
+        "permanece en su categoría general de Salud."
     )
 
     _anio_pae = 2026

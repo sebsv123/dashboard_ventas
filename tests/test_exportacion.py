@@ -101,6 +101,63 @@ def test_hoja_wanderlust_corte_excluye_polizas_posteriores(contrato):
     assert fila_corte["PAE (€)"] == pytest.approx(120.0)  # solo P1, P-JULIO queda fuera
 
 
+def test_hoja_wanderlust_corte_excluye_poliza_eiac_posterior(contrato):
+    polizas = pd.DataFrame([{
+        "poliza": "FUTURA-EIAC", "razon_social": "ASISA PARTICULARES",
+        "forma_pago": "A", "fecha_efecto": "2026-09-01",
+        "situacion": "A", "fecha_baja": None,
+    }])
+    eiac_polizas = pd.DataFrame([{
+        "numero_poliza": "FUTURA-EIAC", "ramo_entidad": "RASA",
+        "fecha_efecto_inicial": "2026-09-01",
+        "prima_neta_anualizada_poli": 100.0,
+    }])
+
+    tabla = _hoja_wanderlust(
+        polizas, pd.DataFrame(), contrato, date(2026, 9, 25),
+        df_eiac_polizas=eiac_polizas,
+    )
+
+    total = tabla.loc[tabla["Categoría"] == "TOTAL 2026"].iloc[0]
+    corte = tabla.loc[
+        tabla["Categoría"] == "PAE acumulado a 2026-08-31 (mes anterior completo)"
+    ].iloc[0]
+    assert total["PAE (€)"] == pytest.approx(100.0)
+    assert corte["PAE (€)"] == pytest.approx(0.0)
+    assert corte["Altas"] == 0
+    assert corte["Anuladas"] == 0
+
+
+@pytest.mark.parametrize(
+    "fecha_baja, pae_al_corte",
+    [("2026-08-31", -100.0), ("2026-09-10", 100.0)],
+)
+def test_hoja_wanderlust_corte_aplica_anulacion_cuando_ocurre(
+    contrato, fecha_baja, pae_al_corte
+):
+    polizas = pd.DataFrame([{
+        "poliza": "BAJA", "razon_social": "ASISA PARTICULARES",
+        "forma_pago": "A", "fecha_efecto": "2026-06-01",
+        "situacion": "B", "fecha_baja": fecha_baja,
+    }])
+    facturacion = pd.DataFrame([{
+        "poliza": "BAJA", "prima_neta": 100.0,
+        "periodo_liquidacion": "2026-06", "fecha_desde": "2026-06-01",
+        "fecha_hasta": "2026-12-31",
+    }])
+
+    tabla = _hoja_wanderlust(polizas, facturacion, contrato, date(2026, 9, 25))
+
+    total = tabla.loc[tabla["Categoría"] == "TOTAL 2026", "PAE (€)"].iloc[0]
+    corte = tabla.loc[
+        tabla["Categoría"] == "PAE acumulado a 2026-08-31 (mes anterior completo)"
+    ].iloc[0]
+    assert total == pytest.approx(-100.0)
+    assert corte["PAE (€)"] == pytest.approx(pae_al_corte)
+    assert corte["Altas"] == (1 if pae_al_corte > 0 else 0)
+    assert corte["Anuladas"] == (1 if pae_al_corte < 0 else 0)
+
+
 def test_hoja_wanderlust_no_corte_en_enero(contrato):
     # En enero, el mes anterior completo (diciembre) es de OTRO año -> no
     # tiene sentido compararlo contra el PAE 2026, así que no se añade fila.

@@ -25,20 +25,14 @@ confirmada por ASISA para "ASISA INTEGRAL"/"ASISA PYMES" -> "Salud
 colectivos privados" (son los únicos productos de Salud que no son
 individuales en el contrato); revisar si aparece contradicción real.
 
-MULTIRRAMO SALUD+ACCIDENTES: el agente a veces vende Accidentes dentro de
-una póliza de Salud (multirramo). Investigado julio 2026: el campo SUBRAMO
-de Liquidación (fichero CSV oficial) solo se ha visto con el valor "VACIO"
-en los datos disponibles, y ni siquiera se ingiere hoy en
-`ingestion.liquidacion` (no hay columna `subramo` en la tabla `liquidacion`
-ni en ningún otro sitio de la base de datos). Tampoco hay señal equivalente
-en los ficheros EIAC (`ingestion.eiac_xml` expone `descripcion_ramo` /
-`ramo_entidad`, pero ninguno distingue "Salud con Accidentes incluido" de
-"Salud sin Accidentes" — ver `engine.eiac_integracion`). CONCLUSIÓN: con los
-datos actuales no hay forma de separar este caso; estas pólizas se
-clasifican solo por su `razon_social` de Salud, así que el Accidentes
-incluido en una multirramo NO se contabiliza aparte en "ASISA Accidentes"
-todavía. Pendiente de confirmar con más datos reales (o con SUBRAMO si algún
-día trae un valor real, no solo "VACIO").
+MULTIRRAMO SALUD+ACCIDENTES: si EIAC POLI trae en `coberturas_wanderlust`
+los códigos GS30 (Dental), GS09 (Hospitalización) o GS99 (Accidentes) con
+sus primas, se separan de la prima de Salud y se asignan a sus categorías
+PAE sin doble conteo. Si faltan esas coberturas, códigos o primas, no hay
+base fiable para separarlas y la póliza conserva la clasificación general
+de Salud. El campo SUBRAMO de Liquidación solo se ha visto como "VACIO" y
+no se ingiere, por lo que tampoco permite completar los casos sin detalle
+de coberturas en EIAC POLI.
 
 PUNTO DE PARTIDA (cartera a 1 de enero de 2026): tratado como 0
 explícitamente — el agente no tenía producción antes de febrero de 2026
@@ -61,12 +55,10 @@ posterior, cuenta como PAE ganado normal, igual que si nunca se hubiera
 anulado. Sin ambas fechas (`fecha_baja` de Pólizas, `fecha_hasta` del
 primer recibo) no se puede confirmar el vencimiento natural, así que por
 defecto SÍ se resta — ver `_es_vencimiento_natural`. Limitación real de
-datos: las pólizas provisionales de EIAC nunca traen `fecha_baja` (el
-upsert de `engine.eiac_integracion` la deja siempre en None) ni sus recibos
-traen `fecha_hasta` (no existe esa columna en `eiac_recibos`), así que esta
-distinción hoy solo puede confirmarse con datos ya presentes en el CSV
-oficial — cualquier anulación que solo se vea por EIAC sigue restando por
-defecto hasta que llegue el CSV oficial que lo confirme o lo desmienta.
+datos: EIAC RECI no trae `fecha_hasta`, pero EIAC POLI puede aportar
+`fecha_anulacion` y `fecha_fin_seguro`. Si falta alguna de las dos fechas,
+el vencimiento natural no se puede confirmar y la anulación resta por
+defecto hasta disponer de datos que lo aclaren.
 """
 
 from __future__ import annotations
@@ -161,6 +153,8 @@ class ResultadoPae:
     sin_categoria: int = 0
     pae_efectivo: float = 0.0
     pae_futuro: float = 0.0
+    altas_efectivas: int = 0
+    bajas_efectivas: int = 0
 
     @property
     def pae_total(self) -> float:
@@ -199,6 +193,10 @@ def calcular_pae_anual(
     vencimiento natural (producto de duración fija, p.ej. Travel) y cuenta
     como PAE ganado normal — ver `_es_vencimiento_natural` y el caso real
     64171931 en el docstring del módulo.
+
+    Con `fecha_corte`, `pae_efectivo` refleja las altas y anulaciones que ya
+    habían ocurrido a esa fecha; `pae_futuro` recoge la variación posterior
+    necesaria para llegar al PAE total, sin cambiar el total anual.
     """
     objetivo_final = objetivo if objetivo is not None else contrato.wanderlust_objetivo_paes
     resultado = ResultadoPae(anio=anio, objetivo=objetivo_final)
@@ -257,6 +255,7 @@ def calcular_pae_anual(
         except (TypeError, ValueError, json.JSONDecodeError):
             return []
 
+    corte = pd.Timestamp(fecha_corte) if fecha_corte is not None else None
     for _, fila in fusion.iterrows():
         categoria = _categoria(fila["razon_social"], contrato)
         multiplicador = multiplicadores.get(categoria) if categoria else None
@@ -335,9 +334,19 @@ def calcular_pae_anual(
         elif signo > 0:
             desglose.polizas_alta += 1
 
-        if fecha_corte is not None:
-            if efecto <= pd.Timestamp(fecha_corte):
-                resultado.pae_efectivo += signo * pae_poliza
+        if corte is not None:
+            if efecto <= corte:
+                baja_posterior = (
+                    anulacion_real and fecha_baja is not None and not pd.isna(fecha_baja)
+                    and pd.Timestamp(fecha_baja) > corte
+                )
+                signo_corte = 1.0 if baja_posterior else signo
+                resultado.pae_efectivo += signo_corte * pae_poliza
+                resultado.pae_futuro += (signo - signo_corte) * pae_poliza
+                if signo_corte > 0:
+                    resultado.altas_efectivas += 1
+                elif signo_corte < 0:
+                    resultado.bajas_efectivas += 1
             else:
                 resultado.pae_futuro += signo * pae_poliza
 

@@ -167,7 +167,7 @@ def _hoja_wanderlust(
                 "PAE (€)": resultado.pae_futuro,
                 "Altas": None,
                 "Anuladas": None,
-                "Nota": "Producción 2026 con fecha_efecto posterior a la fecha actual.",
+                "Nota": "Variación posterior al corte: altas futuras y anulaciones posteriores ya registradas.",
             },
             {
                 "Categoría": "PAE total 2026 comprometido",
@@ -213,21 +213,17 @@ def _hoja_wanderlust(
 
     corte = _fecha_corte_mes_anterior(hoy)
     if corte.year == hoy.year:
-        df_polizas_corte = df_polizas[
-            df_polizas["fecha_efecto"].notna()
-            & (pd.to_datetime(df_polizas["fecha_efecto"]) <= pd.Timestamp(corte))
-        ]
         resultado_corte = calcular_pae_anual(
-            df_polizas_corte, df_facturacion, contrato, anio=hoy.year,
+            df_polizas, df_facturacion, contrato, anio=hoy.year,
             df_eiac_polizas=df_eiac_polizas, fecha_corte=corte,
         )
         filas.append(
             {
                 "Categoría": f"PAE acumulado a {corte.isoformat()} (mes anterior completo)",
-                "PAE (€)": resultado_corte.pae_total,
-                "Altas": sum(d.polizas_alta for d in resultado_corte.por_categoria.values()),
-                "Anuladas": sum(d.polizas_baja for d in resultado_corte.por_categoria.values()),
-                "Nota": "Solo pólizas con fecha_efecto <= esta fecha — para comparar contra un correo de seguimiento de ASISA con esa fecha de corte.",
+                "PAE (€)": resultado_corte.pae_efectivo,
+                "Altas": resultado_corte.altas_efectivas,
+                "Anuladas": resultado_corte.bajas_efectivas,
+                "Nota": "Solo altas y anulaciones ocurridas hasta esta fecha — para comparar con el seguimiento de ASISA al mismo corte.",
             }
         )
 

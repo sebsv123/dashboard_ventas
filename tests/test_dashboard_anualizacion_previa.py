@@ -1,6 +1,8 @@
 """Vista rápida aplica la exclusión de anualización previa con el motor real."""
 
 import sqlite3
+import calendar
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -17,33 +19,48 @@ def _valor(texto: str) -> float:
     return float(texto.replace(" €", "").replace(",", ""))
 
 
+def _sumar_meses(anio: int, mes: int, n: int) -> tuple[int, int]:
+    total = anio * 12 + (mes - 1) + n
+    return total // 12, total % 12 + 1
+
+
 @pytest.mark.usefixtures("monkeypatch")
 def test_vista_rapida_excluye_anualizacion_previa_y_mantiene_vida(tmp_path, monkeypatch):
-    # La fecha de ejecución del proyecto es agosto de 2026; este escenario
-    # sintético reproduce el periodo mostrado por Vista rápida en esa fecha.
+    hoy = date.today()
+    periodo_actual = f"{hoy.year:04d}-{hoy.month:02d}"
+    anio_anualizacion, mes_anualizacion = _sumar_meses(hoy.year, hoy.month, -2)
+    periodo_anualizacion = f"{anio_anualizacion:04d}-{mes_anualizacion:02d}"
+    anio_vida, mes_vida = _sumar_meses(hoy.year, hoy.month, -3)
+    periodo_vida = f"{anio_vida:04d}-{mes_vida:02d}"
+    inicio_actual = f"{periodo_actual}-01"
+    fin_actual = f"{periodo_actual}-{calendar.monthrange(hoy.year, hoy.month)[1]:02d}"
+    inicio_anualizacion = f"{periodo_anualizacion}-01"
+    inicio_vida = f"{periodo_vida}-01"
+    fin_vida = f"{periodo_vida}-{calendar.monthrange(anio_vida, mes_vida)[1]:02d}"
+
     db_path = tmp_path / "anualizacion_previa.db"
     conn = sqlite3.connect(db_path)
     inicializar_schema(conn)
     conn.executemany(
         "INSERT INTO polizas (poliza, razon_social, forma_pago, situacion, fecha_efecto) VALUES (?, ?, ?, ?, ?)",
         [
-            ("SALUD-LEGITIMA", "ASISA PARTICULARES", "M", "A", "2026-08-01"),
-            ("SALUD-YA-ANUALIZADA", "ASISA PARTICULARES", "M", "A", "2026-06-01"),
-            ("VIDA-RECURRENTE", "ASISA VIDA TRANQUILIDAD", "M", "A", "2026-05-01"),
+            ("SALUD-LEGITIMA", "ASISA PARTICULARES", "M", "A", inicio_actual),
+            ("SALUD-YA-ANUALIZADA", "ASISA PARTICULARES", "M", "A", inicio_anualizacion),
+            ("VIDA-RECURRENTE", "ASISA VIDA TRANQUILIDAD", "M", "A", inicio_vida),
         ],
     )
     conn.executemany(
         "INSERT INTO facturacion (poliza, cartera, prima_neta, prima_total, fecha_desde, fecha_hasta, periodo_liquidacion) VALUES (?, ?, ?, ?, ?, ?, ?)",
         [
-            ("SALUD-LEGITIMA", "CARTERA", 263.00, 263.00, "2026-08-01", "2026-08-31", "2026-08"),
-            ("SALUD-YA-ANUALIZADA", "CARTERA", 143.20, 143.20, "2026-08-01", "2026-08-31", "2026-08"),
-            ("VIDA-RECURRENTE", "CARTERA", 159.5166666667, 159.5166666667, "2026-05-01", "2026-05-31", "2026-05"),
-            ("VIDA-RECURRENTE", "CARTERA", 159.5166666667, 159.5166666667, "2026-08-01", "2026-08-31", "2026-08"),
+            ("SALUD-LEGITIMA", "CARTERA", 263.00, 263.00, inicio_actual, fin_actual, periodo_actual),
+            ("SALUD-YA-ANUALIZADA", "CARTERA", 143.20, 143.20, inicio_actual, fin_actual, periodo_actual),
+            ("VIDA-RECURRENTE", "CARTERA", 159.5166666667, 159.5166666667, inicio_vida, fin_vida, periodo_vida),
+            ("VIDA-RECURRENTE", "CARTERA", 159.5166666667, 159.5166666667, inicio_actual, fin_actual, periodo_actual),
         ],
     )
     conn.execute(
         "INSERT INTO liquidacion (poliza, comision, accion, periodo_liquidacion, fecha_desde, es_extorno) VALUES (?, ?, ?, ?, ?, ?)",
-        ("SALUD-YA-ANUALIZADA", 429.60, "ANUALIZADA", "2026-06", "2026-06-01", 0),
+        ("SALUD-YA-ANUALIZADA", 429.60, "ANUALIZADA", periodo_anualizacion, inicio_anualizacion, 0),
     )
     conn.commit()
     conn.close()
